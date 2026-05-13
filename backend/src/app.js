@@ -1,0 +1,44 @@
+import cors from "cors";
+import express from "express";
+import path from "path";
+
+import { authRoutes } from "./routes/authRoutes.js";
+import { bookingRoutes } from "./routes/bookingRoutes.js";
+import { dataRoutes } from "./routes/dataRoutes.js";
+import { notificationRoutes } from "./routes/notificationRoutes.js";
+import { uploadRoutes } from "./routes/uploadRoutes.js";
+
+const app = express();
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
+app.use(express.json({ limit: "5mb" }));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
+// Health check
+app.get("/api/health", (_req, res) => {
+  res.status(200).json({ ok: true, service: "lawconnect-api", timestamp: new Date().toISOString() });
+});
+
+// Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/bookings", bookingRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api", dataRoutes);
+
+// Global error handler
+app.use((err, _req, res, _next) => {
+  console.error("[ERROR]", err.message || err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    message: err.message || "Internal server error.",
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+  });
+});
+
+export { app };
