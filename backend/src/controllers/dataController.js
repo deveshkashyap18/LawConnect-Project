@@ -57,7 +57,7 @@ const toUserDto = (user) => ({
   updatedAt: user.updatedAt,
 });
 
-const toCaseDto = (caseItem) => ({
+export const toCaseDto = (caseItem) => ({
   id: caseItem._id.toString(),
   clientId: caseItem.clientId?.toString(),
   lawyerId: caseItem.lawyerId?.toString(),
@@ -88,6 +88,7 @@ const toCaseDto = (caseItem) => ({
     title: t.title,
     description: t.description,
     type: t.type,
+    addedByRole: t.addedByRole || (["Progress Update", "Client Update"].includes(t.title) ? "client" : "lawyer"),
   })),
 });
 
@@ -401,6 +402,7 @@ const addCaseTimelineEvent = async (req, res) => {
     title,
     description,
     type: type || "update",
+    addedByRole: req.user.role,
   });
   await caseItem.save();
 
@@ -785,6 +787,53 @@ const getLawyerEarnings = async (req, res) => {
   return res.status(200).json({ totalEarnings, thisMonthEarnings, transactionsCount: transactions.length });
 };
 
+const updateCaseTimelineEvent = async (req, res) => {
+  const { eventId } = req.params;
+  const { title, description } = req.body;
+
+  if (!title || !description) {
+    return res.status(400).json({ message: "title and description are required." });
+  }
+
+  const caseItem = await Case.findById(req.params.id);
+  if (!caseItem) {
+    return res.status(404).json({ message: "Case not found." });
+  }
+
+  // Permission check
+  if (req.user.role === "client" && caseItem.clientId.toString() !== req.user._id.toString()) {
+    return res.status(403).json({ message: "You can only update your own cases." });
+  }
+  if (req.user.role === "lawyer" && req.user._id.toString() !== caseItem.lawyerId.toString()) {
+    return res.status(403).json({ message: "You can only update your assigned cases." });
+  }
+
+  const event = caseItem.timeline.id(eventId);
+  if (!event) {
+    return res.status(404).json({ message: "Timeline event not found." });
+  }
+
+  // Role-based restriction: Only the creator role can edit
+  if (event.addedByRole !== req.user.role) {
+    return res.status(403).json({ message: `Only the ${event.addedByRole} can edit this event.` });
+  }
+
+  event.title = title;
+  event.description = description;
+  await caseItem.save();
+
+  const dto = toCaseDto(caseItem.toObject());
+  try {
+    const io = getIo();
+    io.to(caseItem.clientId.toString()).emit("timeline_update", dto);
+    io.to(caseItem.lawyerId.toString()).emit("timeline_update", dto);
+  } catch (error) {
+    console.error("Socket emission failed:", error);
+  }
+
+  return res.status(200).json({ caseItem: dto });
+};
+
 export {
   addCaseTimelineEvent,
   createCase,
@@ -802,6 +851,7 @@ export {
   getMessages,
   submitReview,
   updateCaseStatus,
+  updateCaseTimelineEvent,
   updateLawyerSlot,
   updateLawyerVerification,
   updateTransactionStatus,

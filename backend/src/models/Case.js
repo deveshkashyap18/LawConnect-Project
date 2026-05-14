@@ -28,6 +28,7 @@ const timelineSchema = new mongoose.Schema(
     title: { type: String, required: true },
     description: { type: String, required: true },
     type: { type: String, default: "update" },
+    addedByRole: { type: String, enum: ["lawyer", "client", "system"], default: "system" },
   },
   { timestamps: false },
 );

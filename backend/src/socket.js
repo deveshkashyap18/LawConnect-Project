@@ -140,6 +140,7 @@ export const initializeSocket = (httpServer) => {
           bookingId: message.bookingId?.toString() || "",
           timestamp: message.timestamp,
           read: false,
+          tempId: data.tempId,
         };
 
         // Emit to receiver

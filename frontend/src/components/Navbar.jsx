@@ -95,6 +95,14 @@ const Navbar = () => {
 
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+
+  useEffect(() => {
+    // Reset unread dot when on messages page
+    if (location.pathname === "/messages") {
+      setHasUnreadMessages(false);
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -124,8 +132,18 @@ const Navbar = () => {
 
     socket.on("new_notification", handleNewNotification);
 
+    const handleIncomingMessage = (msg) => {
+      // Show dot if not on messages page
+      if (location.pathname !== "/messages" && String(msg.receiverId) === String(currentUser.id)) {
+        setHasUnreadMessages(true);
+      }
+    };
+
+    socket.on("receive_message", handleIncomingMessage);
+
     return () => {
       socket.off("new_notification", handleNewNotification);
+      socket.off("receive_message", handleIncomingMessage);
     };
   }, [currentUser]);
 
@@ -198,9 +216,12 @@ const Navbar = () => {
               <Link
                 key={`${link.to}-${link.label}`}
                 to={link.to}
-                className="text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
+                className="relative text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
               >
                 {link.label}
+                {link.label === "Messages" && hasUnreadMessages && (
+                  <span className="absolute -top-1 -right-2 flex h-2 w-2 rounded-full bg-primary animate-pulse" />
+                )}
               </Link>
             ))}
           </div>
@@ -228,7 +249,7 @@ const Navbar = () => {
                 <Link to="/profile">
                   <Button variant="ghost" size="sm">
                     <User className="mr-2 h-4 w-4" />
-                    Profile
+                    {currentUser?.name || "Profile"}
                   </Button>
                 </Link>
                 <Link to="/settings">
@@ -283,8 +304,11 @@ const Navbar = () => {
 
                   {primaryLinks.map((link) => (
                     <Link key={`${link.to}-${link.label}`} to={link.to}>
-                      <Button variant="ghost" className="w-full justify-start">
+                      <Button variant="ghost" className="w-full justify-start relative">
                         {link.label}
+                        {link.label === "Messages" && hasUnreadMessages && (
+                          <span className="ml-2 flex h-2 w-2 rounded-full bg-primary animate-pulse" />
+                        )}
                       </Button>
                     </Link>
                   ))}
@@ -303,7 +327,7 @@ const Navbar = () => {
                       <Link to="/profile">
                         <Button variant="ghost" className="w-full justify-start">
                           <User className="mr-2 h-4 w-4" />
-                          Profile
+                          {currentUser?.name || "Profile"}
                         </Button>
                       </Link>
                       <Link to="/settings">

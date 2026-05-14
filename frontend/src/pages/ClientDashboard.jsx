@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 
 import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
-import { CaseUpdateDialog } from "@/components/CaseUpdateDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -13,6 +12,7 @@ import { useAuth } from "@/context/AuthContext";
 
 import {
   addCaseTimelineEvent,
+  updateCaseTimelineEvent,
   cancelBooking,
   fetchBookings,
   fetchCases,
@@ -20,6 +20,8 @@ import {
   uploadDocument,
 } from "@/lib/dataService";
 import { LawyerSuggestions } from "@/components/LawyerSuggestions";
+import { CaseUpdateDialog } from "@/components/CaseUpdateDialog";
+import { TimelineEventEditDialog } from "@/components/TimelineEventEditDialog";
 import { socket } from "@/lib/socketClient";
 import {
   Briefcase,
@@ -159,7 +161,7 @@ const ClientDashboard = () => {
   const handleCaseUpdate = async (caseId, update) => {
     try {
       const updated = await addCaseTimelineEvent(caseId, {
-        title: "Progress Update",
+        title: "Client Update",
         description: update,
         type: "update",
       });
@@ -171,12 +173,24 @@ const ClientDashboard = () => {
     }
   };
 
+  const handleTimelineUpdate = async (caseId, eventId, update) => {
+    try {
+      const updatedCase = await updateCaseTimelineEvent(caseId, eventId, update);
+      setCases((prev) =>
+        prev.map((c) => (c.id === caseId ? updatedCase : c))
+      );
+      toast.success("Timeline event updated successfully.");
+    } catch (error) {
+      toast.error(error.message || "Failed to update timeline event.");
+    }
+  };
+
   // ── Document upload ───────────────────────────────────────────────────────
   const handleDocumentUpload = async (caseId, file) => {
     if (!file) return;
     try {
       setUploadingCaseId(caseId);
-      await uploadDocument(file);
+      await uploadDocument(file, caseId);
       toast.success(`"${file.name}" uploaded.`);
       // Refresh cases to get updated document list
       const updated = await fetchCases().catch(() => cases);
@@ -378,21 +392,59 @@ const ClientDashboard = () => {
                         </div>
                       </div>
 
+                      {/* Case Documents List */}
+                      {caseItem.documents && caseItem.documents.length > 0 && (
+                        <div className="mb-6 space-y-2 pt-4 border-t">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Case Documents</h4>
+                          {caseItem.documents.map((doc) => (
+                            <div key={doc.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border rounded-xl bg-muted/20 hover:bg-muted/40 transition-colors gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="p-2 bg-primary/10 rounded-lg shrink-0">
+                                  <FileText className="h-4 w-4 text-primary" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-bold truncate">{doc.name}</p>
+                                  <p className="text-[10px] text-muted-foreground italic">Uploaded on {new Date(doc.uploadedAt || Date.now()).toLocaleDateString()}</p>
+                                </div>
+                              </div>
+                              <div className="flex gap-2 shrink-0">
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="h-8 w-8 p-0"
+                                  onClick={() => handleDocumentDownload(doc)}
+                                >
+                                  <Download className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       {/* Timeline */}
                       {caseItem.timeline?.length > 0 && (
                         <div className="border-t pt-4 mb-4">
                           <h4 className="font-semibold mb-3">Case Timeline</h4>
                           <div className="space-y-3">
                             {caseItem.timeline.map((event) => (
-                              <div key={event.id} className="flex gap-3">
+                              <div key={event.id} className="flex gap-3 group">
                                 <div className="flex flex-col items-center">
                                   <div className="w-2 h-2 rounded-full bg-primary" />
                                   <div className="w-px h-full bg-border" />
                                 </div>
                                 <div className="flex-1 pb-3">
-                                  <p className="font-medium">{event.title}</p>
-                                  <p className="text-sm text-muted-foreground">{event.description}</p>
-                                  <p className="text-xs text-muted-foreground mt-1">{event.date}</p>
+                                  <div className="flex items-start justify-between">
+                                    <p className="text-lg font-bold">{event.title}</p>
+                                    {event.addedByRole === "client" && (
+                                      <TimelineEventEditDialog
+                                        event={event}
+                                        onUpdate={(eventId, update) => handleTimelineUpdate(caseItem.id, eventId, update)}
+                                      />
+                                    )}
+                                  </div>
+                                  <p className="text-base text-muted-foreground mt-1 leading-relaxed">{event.description}</p>
+                                  <p className="text-sm text-muted-foreground/60 mt-1">{event.date}</p>
                                 </div>
                               </div>
                             ))}
@@ -401,19 +453,25 @@ const ClientDashboard = () => {
                       )}
 
                       <div className="flex gap-2 flex-wrap">
-                        <Button variant="outline" size="sm" onClick={() => navigate("/messages")}>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => navigate("/messages", { state: { partnerId: caseItem.lawyerId } })}
+                          disabled={caseItem.status === "pending"}
+                        >
                           <MessageSquare className="h-4 w-4 mr-2" />
                           Message Lawyer
                         </Button>
                         <CaseUpdateDialog
                           caseId={caseItem.id}
                           caseTitle={caseItem.title}
+                          disabled={caseItem.status !== "active"}
                           onUpdate={handleCaseUpdate}
                         />
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={uploadingCaseId === caseItem.id}
+                          disabled={uploadingCaseId === caseItem.id || caseItem.status !== "active"}
                           onClick={() => {
                             setUploadingCaseId(caseItem.id);
                             fileInputRef.current?.click();

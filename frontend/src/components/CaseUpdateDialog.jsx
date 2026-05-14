@@ -12,7 +12,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-function CaseUpdateDialog({ caseId, caseTitle, onUpdate }) {
+function CaseUpdateDialog({ caseId, caseTitle, onUpdate, disabled }) {
   const [updateText, setUpdateText] = useState("");
   const [open, setOpen] = useState(false);
   const handleSubmit = () => {
@@ -26,9 +26,9 @@ function CaseUpdateDialog({ caseId, caseTitle, onUpdate }) {
     setOpen(false);
   };
   return (
-    <Dialog onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" disabled={disabled}>
           Update Progress
         </Button>
       </DialogTrigger>

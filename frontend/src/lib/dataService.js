@@ -85,9 +85,21 @@ const addCaseTimelineEvent = async (id, payload) => {
   return response.caseItem;
 };
 
-const uploadDocument = async (file) => {
+const updateCaseTimelineEvent = async (caseId, eventId, payload) => {
+  const response = await apiRequest(`/cases/${caseId}/timeline/${eventId}`, {
+    method: "PATCH",
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+  return response.caseItem;
+};
+
+const uploadDocument = async (file, caseId = null) => {
   const formData = new FormData();
   formData.append("document", file);
+  if (caseId) {
+    formData.append("caseId", caseId);
+  }
 
   const response = await apiRequest("/upload", {
     method: "POST",
@@ -217,6 +229,7 @@ export {
   createCaseRequest,
   updateCaseStatus,
   addCaseTimelineEvent,
+  updateCaseTimelineEvent,
   fetchAdminOverview,
   fetchCases,
   fetchLawyerById,

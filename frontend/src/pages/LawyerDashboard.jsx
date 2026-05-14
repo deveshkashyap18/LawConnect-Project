@@ -10,11 +10,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
+import { Calendar as CalendarUI } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
 
 import { CaseUpdateDialog } from "@/components/CaseUpdateDialog";
+import { TimelineEventEditDialog } from "@/components/TimelineEventEditDialog";
 import {
   addCaseTimelineEvent,
+  updateCaseTimelineEvent,
   createLawyerSlot,
   deleteLawyerSlot,
   fetchBookings,
@@ -22,6 +29,7 @@ import {
   fetchLawyerEarnings,
   fetchLawyerSlots,
   updateBookingStatus,
+  updateCaseStatus,
   updateLawyerSlot,
   uploadDocument,
 } from "@/lib/dataService";
@@ -35,7 +43,6 @@ import {
 } from "@/lib/slotUtils";
 import {
   Briefcase,
-  Calendar,
   CheckCircle,
   IndianRupee,
   MessageSquare,
@@ -47,7 +54,8 @@ import {
   XCircle,
   Zap,
   Download,
-  FileText
+  FileText,
+  Calendar as CalendarIcon
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -64,6 +72,7 @@ const LawyerDashboard = () => {
   const [slotForm, setSlotForm] = useState({ date: "", startTime: "10:00", endTime: "10:45" });
   const [editingSlotId, setEditingSlotId] = useState("");
   const [uploadingCaseId, setUploadingCaseId] = useState(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   // verified comes from the lawyer profile via hydrateUser in authController
@@ -165,13 +174,37 @@ const LawyerDashboard = () => {
     setEditingSlotId("");
   };
 
+  const generateTimeOptions = () => {
+    const options = [];
+    for (let hour = 0; hour < 24; hour++) {
+      for (let minute = 0; minute < 60; minute += 15) {
+        const h = String(hour).padStart(2, "0");
+        const m = String(minute).padStart(2, "0");
+        const time24 = `${h}:${m}`;
+        
+        // Convert to AM/PM for label
+        const displayHour = hour % 12 || 12;
+        const ampm = hour >= 12 ? "PM" : "AM";
+        const label = `${displayHour}:${m} ${ampm}`;
+        
+        options.push({ value: time24, label });
+      }
+    }
+    return options;
+  };
+  
+  const timeOptions = useMemo(() => generateTimeOptions(), []);
+
   // Upload document for a specific case
   const handleDocumentUpload = async (caseId, file) => {
     if (!file) return;
     try {
       setUploadingCaseId(caseId);
-      await uploadDocument(file);
+      await uploadDocument(file, caseId);
       toast.success(`Document "${file.name}" uploaded to case.`);
+      // Refresh case data
+      const response = await fetchCases().catch(() => null);
+      if (response) setLawyerCases(response);
     } catch (error) {
       toast.error(error.message || "Failed to upload document.");
     } finally {
@@ -228,23 +261,17 @@ const LawyerDashboard = () => {
     }
 
     try {
-      if (editingSlotId) {
-        const response = await updateLawyerSlot(editingSlotId, slotForm);
-        setSlots(response.slots || []);
-        resetSlotForm();
-        toast.success("Slot updated.");
-        return;
-      }
-
-      const weekdayDates = getWeekdayDatesFrom(slotForm.date, 30);
+      // Convert time to 24h format for backend if needed, but our slot system already handles HH:mm
+      // Let's just ensure it's valid
+      const date = slotForm.date;
       let createdCount = 0;
-
-      for (const date of weekdayDates) {
-        try {
-          await createLawyerSlot({ date, startTime: slotForm.startTime, endTime: slotForm.endTime });
-          createdCount += 1;
-        } catch (error) {
-          if (!String(error?.message || "").toLowerCase().includes("already exists")) throw error;
+      
+      try {
+        await createLawyerSlot({ date, startTime: slotForm.startTime, endTime: slotForm.endTime });
+        createdCount = 1;
+      } catch (error) {
+        if (!String(error?.message || "").toLowerCase().includes("already exists")) {
+          throw error;
         }
       }
 
@@ -253,12 +280,73 @@ const LawyerDashboard = () => {
       resetSlotForm();
       toast.success(
         createdCount > 0
-          ? `Created ${createdCount} weekday slots from the selected time.`
-          : "Matching weekday slots already exist.",
+          ? `Created slot for ${formatDate(date)} at ${slotForm.startTime}.`
+          : "This slot already exists for the selected date."
       );
     } catch (error) {
       toast.error(error.message || "Unable to save slot.");
     }
+  };
+
+  const convertTo24h = (time12, period) => {
+    let [hours, minutes] = time12.split(":").map(Number);
+    if (!hours && hours !== 0) hours = 10;
+    if (!minutes && minutes !== 0) minutes = 0;
+    
+    if (period === "PM" && hours < 12) hours += 12;
+    if (period === "AM" && hours === 12) hours = 0;
+    
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  };
+
+  const handleTimeChange = (type, value, part) => {
+    setSlotForm(prev => {
+      const currentFullTime = (type === "start" ? prev.startTime : prev.endTime) || "10:00";
+      const parts = currentFullTime.split(":");
+      let h = parts[0] || "10";
+      let m = parts[1] || "00";
+      
+      let period = parseInt(h) >= 12 ? "PM" : "AM";
+      let displayH = parseInt(h) % 12 || 12;
+      
+      let newH = displayH;
+      let newM = m;
+      let newPeriod = period;
+
+      if (part === "time") {
+        if (!value.includes(":")) {
+          newH = parseInt(value) || 12;
+          newM = "00";
+        } else {
+          const [typedH, typedM] = value.split(":").map(v => v || "00");
+          newH = parseInt(typedH) || 12;
+          newM = typedM;
+        }
+      } else if (part === "period") {
+        newPeriod = value;
+      }
+
+      const new24h = convertTo24h(`${newH}:${newM}`, newPeriod);
+      const next = { ...prev };
+      if (type === "start") {
+        next.startTime = new24h;
+        if (!editingSlotId) next.endTime = addMinutesToTime(new24h, 45);
+      } else {
+        next.endTime = new24h;
+      }
+      return next;
+    });
+  };
+
+  const getDisplayTime = (time24) => {
+    if (!time24 || typeof time24 !== "string" || !time24.includes(":")) {
+      return { time: "10:00", period: "AM" };
+    }
+    const [h, m] = time24.split(":");
+    const hour = parseInt(h) || 0;
+    const displayH = hour % 12 || 12;
+    const period = hour >= 12 ? "PM" : "AM";
+    return { time: `${String(displayH).padStart(2, "0")}:${m || "00"}`, period };
   };
 
   const handleEditSlot = (slot) => {
@@ -317,6 +405,30 @@ const LawyerDashboard = () => {
       toast.success(`Booking ${status}.`);
     } catch (error) {
       toast.error(error.message || "Unable to update booking.");
+    }
+  };
+
+  const handleCaseStatusUpdate = async (caseId, status) => {
+    try {
+      const updatedCase = await updateCaseStatus(caseId, status);
+      setLawyerCases((prev) =>
+        prev.map((c) => (c.id === caseId ? updatedCase : c))
+      );
+      toast.success(`Case ${status === "active" ? "accepted" : status}.`);
+    } catch (error) {
+      toast.error(error.message || "Unable to update case status.");
+    }
+  };
+
+  const handleTimelineUpdate = async (caseId, eventId, update) => {
+    try {
+      const updatedCase = await updateCaseTimelineEvent(caseId, eventId, update);
+      setLawyerCases((prev) =>
+        prev.map((c) => (c.id === caseId ? updatedCase : c))
+      );
+      toast.success("Timeline event updated successfully.");
+    } catch (error) {
+      toast.error(error.message || "Failed to update timeline event.");
     }
   };
 
@@ -469,9 +581,30 @@ const LawyerDashboard = () => {
                             <CardTitle className="text-xl">{caseItem.title}</CardTitle>
                             <p className="text-sm text-muted-foreground mt-1">Case ID: {caseItem.id}</p>
                           </div>
-                          <Badge variant={caseItem.status === "active" ? "default" : "secondary"}>
-                            {caseItem.status}
-                          </Badge>
+                          <div className="flex flex-col items-end gap-2">
+                            <Badge variant={caseItem.status === "active" ? "default" : "secondary"}>
+                              {caseItem.status}
+                            </Badge>
+                            {caseItem.status === "pending" && (
+                              <div className="flex gap-1">
+                                <Button
+                                  className="h-8 px-2 bg-blue-600 hover:bg-blue-700 text-xs"
+                                  onClick={() => handleCaseStatusUpdate(caseItem.id, "active")}
+                                >
+                                  <CheckCircle className="h-3 w-3 mr-1" />
+                                  Accept
+                                </Button>
+                                <Button
+                                  variant="destructive"
+                                  className="h-8 px-2 text-xs"
+                                  onClick={() => handleCaseStatusUpdate(caseItem.id, "rejected")}
+                                >
+                                  <XCircle className="h-3 w-3 mr-1" />
+                                  Reject
+                                </Button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent>
@@ -524,14 +657,51 @@ const LawyerDashboard = () => {
                             ))}
                           </div>
                         )}
+
+                        {/* Case Timeline */}
+                        {caseItem.timeline && caseItem.timeline.length > 0 && (
+                          <div className="mb-6 pt-4 border-t">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">Case Timeline</h4>
+                            <div className="space-y-4">
+                              {caseItem.timeline.map((event) => (
+                                <div key={event.id} className="flex gap-4 group">
+                                  <div className="flex flex-col items-center">
+                                    <div className="w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-primary/10" />
+                                    <div className="w-px h-full bg-border mt-2" />
+                                  </div>
+                                  <div className="flex-1 pb-4">
+                                    <div className="flex items-start justify-between">
+                                      <p className="text-lg font-bold">{event.title}</p>
+                                      {event.addedByRole === "lawyer" && (
+                                        <TimelineEventEditDialog
+                                          event={event}
+                                          onUpdate={(eventId, update) => handleTimelineUpdate(caseItem.id, eventId, update)}
+                                        />
+                                      )}
+                                    </div>
+                                    <p className="text-base text-muted-foreground mt-1 leading-relaxed">{event.description}</p>
+                                    <p className="text-sm text-muted-foreground/60 mt-2">{event.date}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex gap-2 flex-wrap">
-                          <Button variant="outline" size="sm" onClick={() => navigate("/messages")}>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => navigate("/messages", { state: { partnerId: caseItem.clientId } })}
+                            disabled={caseItem.status === "pending"}
+                          >
                             <MessageSquare className="h-4 w-4 mr-2" />
                             Message Client
                           </Button>
                           <CaseUpdateDialog
                             caseId={caseItem.id}
                             caseTitle={caseItem.title}
+                            disabled={caseItem.status !== "active"}
                             onUpdate={async (caseId, update) => {
                               try {
                                 const updated = await addCaseTimelineEvent(caseId, {
@@ -550,7 +720,7 @@ const LawyerDashboard = () => {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={uploadingCaseId === caseItem.id}
+                            disabled={uploadingCaseId === caseItem.id || caseItem.status !== "active"}
                             onClick={() => {
                               setUploadingCaseId(caseItem.id);
                               fileInputRef.current?.click();
@@ -576,43 +746,80 @@ const LawyerDashboard = () => {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="space-y-2">
-                      <Label htmlFor="slot-date">Date</Label>
-                      <Input
-                        id="slot-date"
-                        type="date"
-                        min={new Date().toISOString().split("T")[0]}
-                        value={slotForm.date}
-                        onChange={(e) => setSlotForm((prev) => ({ ...prev, date: e.target.value }))}
-                      />
+                      <Label className="text-white/60">Select Date</Label>
+                      <div className="border border-white/10 rounded-xl bg-white/5 p-2 shadow-inner">
+                        <CalendarUI
+                          mode="single"
+                          selected={slotForm.date ? new Date(slotForm.date) : undefined}
+                          onSelect={(date) => {
+                            if (date) {
+                              setSlotForm(prev => ({ ...prev, date: format(date, "yyyy-MM-dd") }));
+                            }
+                          }}
+                          disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
+                          initialFocus
+                          className="w-full"
+                        />
+                      </div>
+                      {slotForm.date && (
+                        <div className="text-[11px] text-primary font-medium mt-1 text-center bg-primary/10 py-1 rounded-full border border-primary/20">
+                          Selected: {format(new Date(slotForm.date), "PPP")}
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="slot-start-time">Start Time</Label>
-                      <Input
-                        id="slot-start-time"
-                        type="time"
-                        value={slotForm.startTime}
-                        onChange={(e) =>
-                          setSlotForm((prev) => ({
-                            ...prev,
-                            startTime: e.target.value,
-                            endTime: editingSlotId ? prev.endTime : addMinutesToTime(e.target.value, 45),
-                          }))
-                        }
-                      />
+                      <Label className="text-white/60">Start Time</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="text"
+                          placeholder="HH:mm"
+                          value={getDisplayTime(slotForm.startTime).time}
+                          onChange={(e) => handleTimeChange("start", e.target.value, "time")}
+                          className="bg-white/5 border-white/10 text-white flex-1"
+                        />
+                        <Select 
+                          value={getDisplayTime(slotForm.startTime).period} 
+                          onValueChange={(val) => handleTimeChange("start", val, "period")}
+                        >
+                          <SelectTrigger className="w-20 bg-white/5 border-white/10 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-[#1e293b] border-white/10 text-white">
+                            <SelectItem value="AM">AM</SelectItem>
+                            <SelectItem value="PM">PM</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
+
                     <div className="space-y-2">
-                      <Label htmlFor="slot-end-time">End Time</Label>
-                      <Input
-                        id="slot-end-time"
-                        type="time"
-                        value={slotForm.endTime}
-                        onChange={(e) => setSlotForm((prev) => ({ ...prev, endTime: e.target.value }))}
-                      />
+                      <Label className="text-white/60">End Time</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="text"
+                          placeholder="HH:mm"
+                          value={getDisplayTime(slotForm.endTime).time}
+                          onChange={(e) => handleTimeChange("end", e.target.value, "time")}
+                          className="bg-white/5 border-white/10 text-white flex-1"
+                        />
+                        <Select 
+                          value={getDisplayTime(slotForm.endTime).period} 
+                          onValueChange={(val) => handleTimeChange("end", val, "period")}
+                        >
+                          <SelectTrigger className="w-20 bg-white/5 border-white/10 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-[#1e293b] border-white/10 text-white">
+                            <SelectItem value="AM">AM</SelectItem>
+                            <SelectItem value="PM">PM</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={handleSlotSubmit} className="flex-1">
                         <Plus className="h-4 w-4 mr-2" />
-                        {editingSlotId ? "Update Slot" : "Apply to Weekdays"}
+                        {editingSlotId ? "Update Slot" : "Create Slot"}
                       </Button>
                       {editingSlotId && (
                         <Button variant="outline" onClick={resetSlotForm}>Cancel</Button>
@@ -631,7 +838,7 @@ const LawyerDashboard = () => {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-                      Pick one slot time and LawConnect will apply that same slot across upcoming weekdays, excluding weekends. Standard full-day generation is also available.
+                      Create a single slot for a specific date and time, or use the "Generate" button to quickly create a full day of slots (10 AM – 4 PM) for tomorrow.
                     </div>
                     {slots.length === 0 ? (
                       <div className="text-center py-8">
@@ -646,7 +853,7 @@ const LawyerDashboard = () => {
                         {slots.map((slot) => (
                           <div key={slot.id} className="flex items-center justify-between gap-4 border rounded-lg p-3 hover:bg-muted/50 transition mb-2">
                             <div className="flex items-center gap-3 flex-1">
-                              <Calendar className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              <CalendarIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                               <div>
                                 <div className="font-medium text-sm">{formatDate(slot.date)}</div>
                                 <div className="text-xs text-muted-foreground">

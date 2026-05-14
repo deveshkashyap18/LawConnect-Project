@@ -22,6 +22,7 @@ const lawyerSchema = new mongoose.Schema(
     rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     location: { type: String },
+    phone: { type: String, default: "" },
     bio: { type: String },
     verified: { type: Boolean, default: false },
     reputationScore: { type: Number, default: 0 },

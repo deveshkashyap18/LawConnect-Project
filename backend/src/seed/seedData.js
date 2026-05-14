@@ -9,61 +9,24 @@ import { Review } from "../models/Review.js";
 import { Transaction } from "../models/Transaction.js";
 import { User } from "../models/User.js";
 
-const getAvatar = (name) => {
-  const n = String(name || "").trim().toLowerCase();
-  const isFemale =
-    n.endsWith("a") ||
-    n.endsWith("i") ||
-    n.endsWith("ee") ||
-    n.endsWith("ya") ||
-    n.endsWith("shree") ||
-    n.endsWith("ti") ||
-    n.endsWith("ri") ||
-    n.endsWith("na") ||
-    n.endsWith("ma") ||
-    n.endsWith("ra") ||
-    n.endsWith("ta");
-  const maleExceptions = [
-    "raja",
-    "rama",
-    "krishna",
-    "musa",
-    "ravi",
-    "rishi",
-    "shakti",
-    "baba",
-    "data",
-    "pasha",
-    "surya",
-    "arya",
-  ];
-  let gender = "men";
-  if (isFemale) {
-    gender = "women";
-    if (maleExceptions.some((ex) => n === ex || n.endsWith(" " + ex))) {
-      gender = "men";
-    }
-  }
-
-  let hash = 0;
-  for (let i = 0; i < n.length; i++) {
-    hash = (hash << 5) - hash + n.charCodeAt(i);
-    hash |= 0;
-  }
-  const id = Math.abs(hash) % 99;
-  return `https://randomuser.me/api/portraits/${gender}/${id}.jpg`;
-};
+import { getAvatar } from "../lib/avatarUtils.js";
 
 const ensureDefaultAdmin = async () => {
-  const existingAdmin = await User.findOne({ email: "admin@lawconnect.com" }).lean();
+  const adminEmail = "admin@lawconnect.com";
+  const defaultPassword = "admin123";
+  const adminHash = await bcrypt.hash(defaultPassword, 10);
+
+  const existingAdmin = await User.findOne({ email: adminEmail });
   if (existingAdmin) {
+    // If admin exists, reset password to default to ensure login works
+    existingAdmin.passwordHash = adminHash;
+    await existingAdmin.save();
     return;
   }
 
-  const adminHash = await bcrypt.hash("admin123", 10);
   await User.create({
     name: "System Admin",
-    email: "admin@lawconnect.com",
+    email: adminEmail,
     role: "admin",
     avatar: getAvatar("System Admin"),
     passwordHash: adminHash,
@@ -117,6 +80,7 @@ const ensureSeedData = async () => {
       rating: 4.8,
       totalReviews: 1,
       location: "Delhi, India",
+      phone: "+91-9988776655",
       bio: "Sarah Johnson is a highly experienced advocate with expertise in criminal and family law matters. Available on LAWCONNECT for consultation.",
       verified: true,
       reputationScore: 92,
@@ -182,18 +146,21 @@ const ensureSeedData = async () => {
           title: "Case Filed",
           description: "Property dispute case officially filed in District Court.",
           type: "update",
+          addedByRole: "lawyer",
         },
         {
           date: "2024-03-15",
           title: "Lawyer Assigned",
           description: "Sarah Johnson assigned as counsel for the case.",
           type: "update",
+          addedByRole: "lawyer",
         },
         {
           date: "2024-05-15",
           title: "First Hearing Completed",
           description: "Court reviewed primary evidence. Next hearing set for June 20.",
           type: "hearing",
+          addedByRole: "lawyer",
         },
       ],
     },

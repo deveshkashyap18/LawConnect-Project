@@ -68,6 +68,12 @@ const Messages = () => {
   }, []);
 
   useEffect(() => {
+    if (location.state?.partnerId) {
+      setSelectedPartnerId(String(location.state.partnerId));
+    }
+  }, [location.state]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
@@ -144,6 +150,9 @@ const Messages = () => {
     if (pId) {
       const found = conversationPartners.find(p => String(p.id) === pId);
       if (found) return found;
+      // If we have a selected ID but haven't found it in partners yet (e.g. data loading), 
+      // don't jump to conversationPartners[0] yet.
+      return null; 
     }
     return conversationPartners[0] || null;
   }, [selectedPartnerId, conversationPartners]);
@@ -168,9 +177,12 @@ const Messages = () => {
     socket.emit("check_status", activePartner.id, (res) => setIsOnline(res.status === "online"));
 
     const onMessage = (m) => setMessages(prev => {
-      const isDup = prev.some(x => (x._id && String(x._id) === String(m._id)) || (x.timestamp === m.timestamp && x.content === m.content && String(x.senderId) === String(m.senderId)));
+      const isDup = prev.some(x => 
+        (x._id && String(x._id) === String(m._id)) || 
+        (m.tempId && String(x._id) === String(m.tempId))
+      );
       if (isDup) {
-        return prev.map(x => (!x._id?.startsWith("temp-") || String(x.senderId) !== String(m.senderId) || x.content !== m.content) ? x : m);
+        return prev.map(x => (String(x._id) === String(m._id) || (m.tempId && String(x._id) === String(m.tempId))) ? m : x);
       }
       return [...prev, m];
     });
@@ -202,17 +214,19 @@ const Messages = () => {
   const handleSend = (attachmentData = null) => {
     if ((!message.trim() && !attachmentData) || !activePartner || !activeBooking) return;
     const now = new Date().toISOString();
+    const tempId = `temp-${Date.now()}`;
     const payload = { 
       receiverId: String(activePartner.id), 
       content: attachmentData ? (message.trim() || `Shared an attachment: ${attachmentData.name}`) : message.trim(), 
       senderName: currentUser.name, 
       bookingId: String(activeBooking.id), 
       timestamp: now,
-      attachment: attachmentData
+      attachment: attachmentData,
+      tempId: tempId
     };
     
     const temp = { 
-      _id: `temp-${Date.now()}`, 
+      _id: tempId, 
       senderId: currentUserId, 
       receiverId: payload.receiverId, 
       content: payload.content, 
@@ -249,7 +263,7 @@ const Messages = () => {
       }
     } catch (error) {
       console.error(error);
-      toast.error("Failed to upload file.");
+      toast.error(error.message || "Failed to upload file.");
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";

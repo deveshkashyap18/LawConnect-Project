@@ -70,7 +70,9 @@ const SelectContent = React.forwardRef(
             position === "popper" &&
               "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]",
           )}
-        />
+        >
+          {children}
+        </SelectPrimitive.Viewport>
         <SelectScrollDownButton />
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
@@ -98,7 +100,7 @@ const SelectItem = React.forwardRef(
           <Check className="h-4 w-4" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText />
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   ),
 );

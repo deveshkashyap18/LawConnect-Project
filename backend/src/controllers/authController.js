@@ -4,50 +4,7 @@ import jwt from "jsonwebtoken";
 import { Lawyer } from "../models/Lawyer.js";
 import { User } from "../models/User.js";
 
-const getAvatar = (name) => {
-  const n = String(name || "").trim().toLowerCase();
-  const isFemale =
-    n.endsWith("a") ||
-    n.endsWith("i") ||
-    n.endsWith("ee") ||
-    n.endsWith("ya") ||
-    n.endsWith("shree") ||
-    n.endsWith("ti") ||
-    n.endsWith("ri") ||
-    n.endsWith("na") ||
-    n.endsWith("ma") ||
-    n.endsWith("ra") ||
-    n.endsWith("ta");
-  const maleExceptions = [
-    "raja",
-    "rama",
-    "krishna",
-    "musa",
-    "ravi",
-    "rishi",
-    "shakti",
-    "baba",
-    "data",
-    "pasha",
-    "surya",
-    "arya",
-  ];
-  let gender = "men";
-  if (isFemale) {
-    gender = "women";
-    if (maleExceptions.some((ex) => n === ex || n.endsWith(" " + ex))) {
-      gender = "men";
-    }
-  }
-
-  let hash = 0;
-  for (let i = 0; i < n.length; i++) {
-    hash = (hash << 5) - hash + n.charCodeAt(i);
-    hash |= 0;
-  }
-  const id = Math.abs(hash) % 99;
-  return `https://randomuser.me/api/portraits/${gender}/${id}.jpg`;
-};
+import { getAvatar } from "../lib/avatarUtils.js";
 
 const sanitizeUser = (user) => {
   const nextUser = { ...user };
@@ -140,6 +97,12 @@ const login = async (req, res) => {
 
   if (!user) {
     return res.status(401).json({ message: "Invalid credentials." });
+  }
+
+  // Safety check: ensure passwordHash exists to prevent bcrypt crash
+  if (!user.passwordHash) {
+    console.error(`Login failed: Password hash missing for user ${normalizedEmail}`);
+    return res.status(401).json({ message: "Password not set for this account. Please use Google Login or reset your password." });
   }
 
   const matches = await bcrypt.compare(String(password || ""), user.passwordHash);

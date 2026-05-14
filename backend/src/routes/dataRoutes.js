@@ -14,6 +14,7 @@ import {
   getLawyers,
   getMessages,
   addCaseTimelineEvent,
+  updateCaseTimelineEvent,
   updateCaseStatus,
   updateLawyerSlot,
   updateLawyerVerification,
@@ -31,6 +32,7 @@ dataRoutes.get("/cases", authRequired, getCases);
 dataRoutes.post("/cases", authRequired, requireRole("client"), createCase);
 dataRoutes.patch("/cases/:id/status", authRequired, updateCaseStatus);
 dataRoutes.post("/cases/:id/timeline", authRequired, addCaseTimelineEvent);
+dataRoutes.patch("/cases/:id/timeline/:eventId", authRequired, updateCaseTimelineEvent);
 dataRoutes.get("/messages", authRequired, getMessages);
 dataRoutes.post("/messages", authRequired, createMessage);
 dataRoutes.get("/lawyers/me/slots", authRequired, requireRole("lawyer"), requireVerifiedLawyer, getLawyerSlots);
