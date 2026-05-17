@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Booking } from "../models/Booking.js";
 import { Case } from "../models/Case.js";
 import { Lawyer } from "../models/Lawyer.js";
@@ -6,6 +7,34 @@ import { Review } from "../models/Review.js";
 import { Transaction } from "../models/Transaction.js";
 import { User } from "../models/User.js";
 import { getIo } from "../socket.js";
+
+const updateLawyerReputation = async (lawyerId) => {
+  try {
+    const lawyer = await Lawyer.findById(lawyerId);
+    if (!lawyer) return;
+
+    // 1. Rating Factor (Max 50 points)
+    const ratingPoints = (lawyer.rating || 0) * 10;
+
+    // 2. Review Volume Factor (Max 20 points)
+    // 2 points per review, capped at 20
+    const reviewPoints = Math.min((lawyer.totalReviews || 0) * 2, 20);
+
+    // 3. Case Success/Completion Factor (Max 30 points)
+    const cases = await Case.find({ lawyerId: lawyer._id }).lean();
+    let successPoints = 0;
+    if (cases.length > 0) {
+      const closedCases = cases.filter(c => c.status === "closed").length;
+      successPoints = Math.round((closedCases / cases.length) * 30);
+    }
+
+    lawyer.reputationScore = Math.min(Math.round(ratingPoints + reviewPoints + successPoints), 100);
+    await lawyer.save();
+    console.log(`Updated reputation for ${lawyer.name}: ${lawyer.reputationScore}`);
+  } catch (error) {
+    console.error("Error updating reputation score:", error);
+  }
+};
 
 const toSlotDto = (slot) => ({
   id: slot._id?.toString(),
@@ -28,8 +57,9 @@ const toLawyerDto = (lawyer) => ({
   role: lawyer.role,
   membershipTier: lawyer.membershipTier,
   specialization: lawyer.specialization,
-  experience: lawyer.experience,
+  experience: lawyer.experience || 0,
   hourlyRate: lawyer.hourlyRate || 1000,
+  baseCaseFee: lawyer.baseCaseFee || 5000,
   rating: lawyer.rating,
   totalReviews: lawyer.totalReviews,
   location: lawyer.location || "India",
@@ -41,6 +71,7 @@ const toLawyerDto = (lawyer) => ({
   avatar: lawyer.avatar,
   isPriority: lawyer.isPriority,
   isSponsored: lawyer.isSponsored,
+  services: (lawyer.services || []).map(s => ({ id: s._id?.toString(), name: s.name, fee: s.fee, description: s.description })),
   consultationSlots: (lawyer.consultationSlots || []).map(toSlotDto),
   verificationStatus: lawyer.verified ? "verified" : "pending",
 });
@@ -64,6 +95,8 @@ export const toCaseDto = (caseItem) => ({
   title: caseItem.title,
   description: caseItem.description,
   status: caseItem.status,
+  finalFee: caseItem.finalFee || 0,
+  paymentStatus: caseItem.paymentStatus || "unpaid",
   createdAt: caseItem.createdAt,
   updatedAt: caseItem.updatedAt,
   hearingDates: (caseItem.hearingDates || []).map((h) => ({
@@ -72,6 +105,7 @@ export const toCaseDto = (caseItem) => ({
     title: h.title,
     location: h.location,
     notes: h.notes,
+    status: h.status || "pending",
   })),
   documents: (caseItem.documents || []).map((d) => ({
     id: d._id?.toString(),
@@ -129,7 +163,7 @@ const toTransactionDto = (transaction) => ({
   method: transaction.method,
 });
 
-const toBookingDto = (b) => ({
+export const toBookingDto = (b) => ({
   id: b._id.toString(),
   clientId: (b.clientId?._id || b.clientId)?.toString(),
   lawyerId: (b.lawyerId?._id || b.lawyerId)?.toString(),
@@ -198,8 +232,8 @@ const getSlotValidation = ({ startTime, endTime }) => {
     return { error: "End time must be after start time." };
   }
 
-  if (duration !== 45) {
-    return { error: "Each consultation slot must be exactly 45 minutes." };
+  if (duration !== 60) {
+    return { error: "Each consultation slot must be exactly 1 hour." };
   }
 
   return { duration };
@@ -211,51 +245,30 @@ const getLawyers = async (req, res) => {
     specialization = "",
     location = "",
     verified = "",
-    minExperience = "",
-    maxExperience = "",
-    minRating = "",
-    minPrice = "",
-    maxPrice = "",
   } = req.query;
   const filters = {};
 
-  if (specialization) {
+  if (specialization && specialization !== "all") {
     filters.specialization = { $regex: String(specialization), $options: "i" };
   }
-  if (location) {
+  if (location && location !== "all") {
     filters.location = { $regex: String(location), $options: "i" };
   }
+  
+  // Only apply verification filter if explicitly requested as true
   if (verified === "true") {
-    filters.verified = true;
-  }
-  if (minExperience || maxExperience) {
-    filters.experience = {};
-    if (minExperience) filters.experience.$gte = Number(minExperience);
-    if (maxExperience) filters.experience.$lte = Number(maxExperience);
-  }
-  if (minRating) {
-    filters.rating = { ...(filters.rating || {}), $gte: Number(minRating) };
-  }
-  if (minPrice || maxPrice) {
-    filters.hourlyRate = {};
-    if (minPrice) filters.hourlyRate.$gte = Number(minPrice);
-    if (maxPrice) filters.hourlyRate.$lte = Number(maxPrice);
-  }
-
-  const viewerRole = req.user?.role;
-  if (viewerRole !== "admin") {
     filters.verified = true;
   }
 
   let lawyers = await Lawyer.find(filters).lean();
 
-  if (q) {
+  if (q && q.trim() !== "") {
     const normalizedQuery = String(q).trim().toLowerCase();
     lawyers = lawyers.filter(
       (lawyer) =>
-        lawyer.name.toLowerCase().includes(normalizedQuery) ||
-        lawyer.specialization.some((item) => item.toLowerCase().includes(normalizedQuery)) ||
-        lawyer.location.toLowerCase().includes(normalizedQuery),
+        (lawyer.name && lawyer.name.toLowerCase().includes(normalizedQuery)) ||
+        (lawyer.specialization && lawyer.specialization.some((item) => item.toLowerCase().includes(normalizedQuery))) ||
+        (lawyer.location && lawyer.location.toLowerCase().includes(normalizedQuery)),
     );
   }
 
@@ -282,6 +295,7 @@ const getLawyerById = async (req, res) => {
 };
 
 const getCases = async (req, res) => {
+  console.log("Fetching cases for user:", req.user._id);
   const { role, _id: userId } = req.user;
   let filter = {};
 
@@ -301,10 +315,20 @@ const createCase = async (req, res) => {
     return res.status(400).json({ message: "lawyerId, title and description required." });
   }
 
-  const lawyer = await Lawyer.findById(lawyerId).select("verified").lean();
-  if (!lawyer || !lawyer.verified) {
+  if (req.user.role === "client") {
+    if (req.user.membershipTier !== "plus") {
+      return res.status(403).json({ 
+        message: "To register or add a case, you must purchase the Client Plus plan. Please upgrade your membership." 
+      });
+    }
+  }
+
+  const lawyerData = await Lawyer.findById(lawyerId).select("verified baseCaseFee").lean();
+  if (!lawyerData || !lawyerData.verified) {
     return res.status(404).json({ message: "Verified lawyer not found." });
   }
+
+  const initialFee = lawyerData.baseCaseFee && lawyerData.baseCaseFee > 0 ? lawyerData.baseCaseFee : 5000;
 
   const newCase = await Case.create({
     clientId: req.user._id,
@@ -312,22 +336,32 @@ const createCase = async (req, res) => {
     title,
     description,
     status: "pending",
+    finalFee: initialFee,
     timeline: [
       {
         date: new Date().toISOString().split("T")[0],
         title: "Consultation Request Sent",
-        description: "Awaiting lawyer acceptance.",
+        description: `Case request sent to lawyer with an estimated fee of INR ${initialFee}.`,
         type: "update",
       },
     ],
   });
 
-  return res.status(201).json({ caseItem: toCaseDto(newCase.toObject()) });
+  const dto = toCaseDto(newCase.toObject());
+  try {
+    const io = getIo();
+    io.to(lawyerId.toString()).emit("case_update", dto);
+  } catch (error) {
+    console.error("Socket emission failed:", error);
+  }
+
+  return res.status(201).json({ caseItem: dto });
 };
 
 const updateCaseStatus = async (req, res) => {
-  const { status } = req.body;
-  if (!["pending", "active", "closed", "rejected"].includes(status)) {
+  console.log("Updating case status:", req.params.id, "to", req.body.status);
+  const { status, paymentStatus, finalFee } = req.body;
+  if (status && !["pending", "active", "closed", "rejected"].includes(status)) {
     return res.status(400).json({ message: "Invalid status value." });
   }
 
@@ -337,7 +371,9 @@ const updateCaseStatus = async (req, res) => {
   }
 
   if (req.user.role === "client") {
-    return res.status(403).json({ message: "Clients cannot change case status." });
+    if (status && status !== "closed") {
+      return res.status(403).json({ message: "Clients can only mark a case as closed." });
+    }
   }
 
   if (req.user.role === "lawyer") {
@@ -350,15 +386,42 @@ const updateCaseStatus = async (req, res) => {
     }
   }
 
-  caseItem.status = status;
-  caseItem.timeline.push({
-    date: new Date().toISOString().split("T")[0],
-    title: `Case Status: ${status.charAt(0).toUpperCase() + status.slice(1)}`,
-    description: `The case status was successfully updated to ${status}.`,
-    type: "update",
-  });
+  if (status) {
+    caseItem.status = status;
+    
+    if (status === "closed") {
+      if (finalFee !== undefined) {
+        caseItem.finalFee = Number(finalFee);
+      } else if (!caseItem.finalFee || caseItem.finalFee === 0) {
+        const lawyer = await Lawyer.findById(caseItem.lawyerId).select("baseCaseFee").lean();
+        caseItem.finalFee = (lawyer && lawyer.baseCaseFee && lawyer.baseCaseFee > 0) ? lawyer.baseCaseFee : 5000;
+      }
+    }
+
+    caseItem.timeline.push({
+      date: new Date().toISOString().split("T")[0],
+      title: `Case Status: ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+      description: status === "closed" 
+        ? `The case has been marked as completed with a final fee of INR ${caseItem.finalFee}.`
+        : `The case status was successfully updated to ${status}.`,
+      type: "update",
+    });
+  }
+
+  if (paymentStatus) {
+    caseItem.paymentStatus = paymentStatus;
+    if (paymentStatus === "paid") {
+      caseItem.timeline.push({
+        date: new Date().toISOString().split("T")[0],
+        title: "Payment Verified",
+        description: `Payment of INR ${caseItem.finalFee} settled successfully.`,
+        type: "payment",
+      });
+    }
+  }
 
   await caseItem.save();
+  await updateLawyerReputation(caseItem.lawyerId);
   const dto = toCaseDto(caseItem.toObject());
 
   try {
@@ -370,6 +433,51 @@ const updateCaseStatus = async (req, res) => {
   }
 
   return res.status(200).json({ caseItem: dto });
+};
+
+const updateCaseFee = async (req, res) => {
+  try {
+    const { finalFee } = req.body;
+    if (finalFee === undefined || isNaN(finalFee)) {
+      return res.status(400).json({ message: "Valid finalFee is required." });
+    }
+
+    const caseItem = await Case.findById(req.params.id);
+    if (!caseItem) {
+      return res.status(404).json({ message: "Case not found." });
+    }
+
+    if (req.user._id.toString() !== caseItem.lawyerId.toString()) {
+      return res.status(403).json({ message: "Only the assigned lawyer can update the case fee." });
+    }
+
+    caseItem.finalFee = Number(finalFee);
+    
+    // Add to timeline
+    caseItem.timeline.push({
+      date: new Date().toISOString().split("T")[0],
+      title: "Case Fee Updated",
+      description: `The lawyer has updated the final fee for this case to INR ${finalFee}.`,
+      type: "update",
+      addedByRole: "lawyer"
+    });
+
+    await caseItem.save();
+    const dto = toCaseDto(caseItem.toObject());
+
+    try {
+      const io = getIo();
+      io.to(caseItem.clientId.toString()).emit("case_update", dto);
+      io.to(caseItem.lawyerId.toString()).emit("case_update", dto);
+    } catch (e) {
+      console.error("Socket error:", e);
+    }
+
+    return res.status(200).json({ caseItem: dto });
+  } catch (error) {
+    console.error("Error updating case fee:", error);
+    return res.status(500).json({ message: "Failed to update case fee." });
+  }
 };
 
 const addCaseTimelineEvent = async (req, res) => {
@@ -412,6 +520,104 @@ const addCaseTimelineEvent = async (req, res) => {
     const io = getIo();
     io.to(caseItem.clientId.toString()).emit("timeline_update", dto);
     io.to(caseItem.lawyerId.toString()).emit("timeline_update", dto);
+  } catch (error) {
+    console.error("Socket emission failed:", error);
+  }
+
+  return res.status(200).json({ caseItem: dto });
+};
+
+const addCaseHearing = async (req, res) => {
+  try {
+    const { date, title, location, notes } = req.body;
+    if (!date || !title || !location) {
+      return res.status(400).json({ message: "Date, title and location are required." });
+    }
+
+    const caseItem = await Case.findById(req.params.id);
+    if (!caseItem) {
+      return res.status(404).json({ message: "Case not found." });
+    }
+
+  // Permission check: only assigned lawyer can add hearings
+  if (req.user._id.toString() !== caseItem.lawyerId.toString()) {
+    return res.status(403).json({ message: "You can only add hearings to your assigned cases." });
+  }
+
+  // Add to hearingDates with default status
+  caseItem.hearingDates.push({ 
+    date, 
+    title, 
+    location, 
+    notes,
+    status: "pending" 
+  });
+
+  // Also add to timeline for visibility
+  caseItem.timeline.push({
+    date: new Date().toISOString().split("T")[0],
+    title: "New Hearing Scheduled",
+    description: `Hearing on ${date} at ${location}. Subject: ${title}`,
+    type: "hearing",
+    addedByRole: "lawyer",
+  });
+
+  await caseItem.save();
+  const dto = toCaseDto(caseItem.toObject());
+
+  try {
+    const io = getIo();
+    io.to(caseItem.clientId.toString()).emit("case_update", dto);
+    io.to(caseItem.lawyerId.toString()).emit("case_update", dto);
+  } catch (error) {
+    console.error("Socket emission failed:", error);
+  }
+
+  return res.status(200).json({ caseItem: dto });
+  } catch (error) {
+    console.error("Error in addCaseHearing:", error);
+    return res.status(500).json({ message: "Internal server error while scheduling hearing." });
+  }
+};
+
+const updateHearingStatus = async (req, res) => {
+  const { status } = req.body;
+  const { id, hearingId } = req.params;
+
+  const caseItem = await Case.findById(id);
+  if (!caseItem) {
+    return res.status(404).json({ message: "Case not found." });
+  }
+
+  // Permission check
+  if (req.user._id.toString() !== caseItem.lawyerId.toString()) {
+    return res.status(403).json({ message: "You are not authorized to update this case." });
+  }
+
+  const hearing = caseItem.hearingDates.find(h => (h._id ? h._id.toString() : h.id) === hearingId);
+  if (!hearing) {
+    return res.status(404).json({ message: "Hearing not found." });
+  }
+
+  hearing.status = status;
+
+  if (status === "completed") {
+    caseItem.timeline.push({
+      date: new Date().toISOString().split("T")[0],
+      title: "Hearing Completed",
+      description: `Hearing on ${hearing.date} (${hearing.title}) has been marked as completed.`,
+      type: "hearing",
+      addedByRole: "lawyer",
+    });
+  }
+
+  await caseItem.save();
+  const dto = toCaseDto(caseItem.toObject());
+
+  try {
+    const io = getIo();
+    io.to(caseItem.clientId.toString()).emit("case_update", dto);
+    io.to(caseItem.lawyerId.toString()).emit("case_update", dto);
   } catch (error) {
     console.error("Socket emission failed:", error);
   }
@@ -615,6 +821,7 @@ const getAdminOverview = async (_req, res) => {
     lawyers: lawyers.map(toLawyerDto),
     bookings: bookings.map(toBookingDto),
     transactions: transactions.map(toTransactionDto),
+    cases: cases.map(toCaseDto),
   });
 };
 
@@ -669,6 +876,25 @@ const deleteLawyerByAdmin = async (req, res) => {
   return res.status(200).json({ success: true });
 };
 
+const deleteUserByAdmin = async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) {
+    return res.status(404).json({ message: "User not found." });
+  }
+
+  if (user.role === "admin") {
+    return res.status(403).json({ message: "Cannot remove an admin user." });
+  }
+
+  await Booking.deleteMany({ clientId: user._id });
+  await Case.deleteMany({ clientId: user._id });
+  await Review.deleteMany({ clientId: user._id });
+  await Transaction.deleteMany({ clientId: user._id });
+  await User.deleteOne({ _id: user._id });
+
+  return res.status(200).json({ success: true });
+};
+
 const updateTransactionStatus = async (req, res) => {
   const { status } = req.body;
   const allowedStatuses = ["completed", "pending", "disputed", "refunded"];
@@ -718,34 +944,25 @@ const updateTransactionStatus = async (req, res) => {
 };
 
 const submitReview = async (req, res) => {
-  const { lawyerId, rating, comment } = req.body;
+  const { lawyerId, rating, comment, bookingId, caseId } = req.body;
 
   if (!lawyerId || !rating || !comment) {
     return res.status(400).json({ message: "Lawyer ID, rating, and comment are required." });
   }
 
   const lawyer = await Lawyer.findById(lawyerId);
-  if (!lawyer || !lawyer.verified) {
+  if (!lawyer) {
     return res.status(404).json({ message: "Lawyer not found." });
   }
 
-  const completedBooking = await Booking.findOne({
-    clientId: req.user._id,
-    lawyerId,
-    status: "completed",
-  }).lean();
-  if (!completedBooking) {
-    return res.status(403).json({
-      message: "You can only review a lawyer after a completed consultation.",
-    });
-  }
+  // Verification check: Client must have a completed booking or case with this lawyer
+  let checkFilter = { clientId: req.user._id, lawyerId };
+  if (bookingId) checkFilter.bookingId = bookingId;
+  if (caseId) checkFilter.caseId = caseId;
 
-  const existingReview = await Review.findOne({
-    clientId: req.user._id,
-    lawyerId,
-  }).lean();
+  const existingReview = await Review.findOne(checkFilter).lean();
   if (existingReview) {
-    return res.status(409).json({ message: "You have already reviewed this lawyer." });
+    return res.status(409).json({ message: "You have already submitted a review for this activity." });
   }
 
   const review = await Review.create({
@@ -754,6 +971,8 @@ const submitReview = async (req, res) => {
     clientName: req.user.name,
     rating,
     comment,
+    bookingId,
+    caseId,
     date: new Date().toISOString().split("T")[0],
   });
 
@@ -762,6 +981,7 @@ const submitReview = async (req, res) => {
   lawyer.rating = Number(avgRating.toFixed(1));
   lawyer.totalReviews = allReviews.length;
   await lawyer.save();
+  await updateLawyerReputation(lawyerId);
 
   return res.status(201).json({ review: toReviewDto(review.toObject()) });
 };
@@ -771,11 +991,20 @@ const getLawyerEarnings = async (req, res) => {
     return res.status(403).json({ message: "Access denied." });
   }
 
+  // Recalculate reputation score to ensure it's up to date on dashboard load
+  await updateLawyerReputation(req.user._id);
+  const lawyer = await Lawyer.findById(req.user._id).lean();
+
   const transactions = await Transaction.find({
     lawyerId: req.user._id,
     status: "completed",
   });
 
+  const consultationTransactions = transactions.filter(t => String(t.caseTitle).startsWith("Consultation on "));
+  const caseTransactions = transactions.filter(t => !String(t.caseTitle).startsWith("Consultation on "));
+
+  const consultationEarnings = consultationTransactions.reduce((sum, t) => sum + t.amount, 0);
+  const caseEarnings = caseTransactions.reduce((sum, t) => sum + t.amount, 0);
   const totalEarnings = transactions.reduce((sum, t) => sum + t.amount, 0);
 
   const now = new Date();
@@ -784,7 +1013,18 @@ const getLawyerEarnings = async (req, res) => {
     .filter((t) => t.paidAt >= monthStart)
     .reduce((sum, t) => sum + t.amount, 0);
 
-  return res.status(200).json({ totalEarnings, thisMonthEarnings, transactionsCount: transactions.length });
+  return res.status(200).json({ 
+    totalEarnings, 
+    consultationEarnings,
+    caseEarnings,
+    thisMonthEarnings, 
+    transactionsCount: transactions.length,
+    consultationsCount: consultationTransactions.length,
+    casesCount: caseTransactions.length,
+    reputationScore: lawyer?.reputationScore || 0,
+    rating: lawyer?.rating || 0,
+    totalReviews: lawyer?.totalReviews || 0,
+  });
 };
 
 const updateCaseTimelineEvent = async (req, res) => {
@@ -834,12 +1074,141 @@ const updateCaseTimelineEvent = async (req, res) => {
   return res.status(200).json({ caseItem: dto });
 };
 
+const payCaseFee = async (req, res) => {
+  console.log("Processing case fee payment for case:", req.params.id);
+  const { method = "UPI" } = req.body;
+  const caseItem = await Case.findById(req.params.id);
+
+  if (!caseItem) {
+    return res.status(404).json({ message: "Case not found." });
+  }
+
+  if (caseItem.clientId.toString() !== req.user._id.toString()) {
+    return res.status(403).json({ message: "Only the client can pay the case fee." });
+  }
+
+  if (caseItem.status !== "closed") {
+    return res.status(400).json({ message: "Fee can only be paid for completed (closed) cases." });
+  }
+
+  if (caseItem.paymentStatus === "paid") {
+    return res.status(400).json({ message: "Case fee has already been paid." });
+  }
+
+  caseItem.paymentStatus = "paid";
+  caseItem.timeline.push({
+    date: new Date().toISOString().split("T")[0],
+    title: "Final Fee Paid",
+    description: `The final case fee of INR ${caseItem.finalFee} has been successfully paid via ${method}.`,
+    type: "update",
+    addedByRole: "client",
+  });
+
+  await caseItem.save();
+
+  // Create a transaction record
+  const lawyer = await Lawyer.findById(caseItem.lawyerId).lean();
+  await Transaction.create({
+    bookingId: new mongoose.Types.ObjectId(), // Virtual booking ID for case fee
+    clientId: caseItem.clientId,
+    clientName: req.user.name,
+    lawyerId: caseItem.lawyerId,
+    lawyerName: lawyer?.name || "Lawyer",
+    caseTitle: caseItem.title,
+    amount: caseItem.finalFee,
+    currency: "INR",
+    status: "completed",
+    paidAt: new Date().toISOString().split("T")[0],
+    method: method,
+  });
+
+  const dto = toCaseDto(caseItem.toObject());
+
+  try {
+    const io = getIo();
+    io.to(caseItem.clientId.toString()).emit("case_update", dto);
+    io.to(caseItem.lawyerId.toString()).emit("case_update", dto);
+  } catch (error) {
+    console.error("Socket emission failed:", error);
+  }
+
+  return res.status(200).json({ caseItem: dto, message: "Payment successful." });
+};
+
+const updateMembershipTier = async (req, res) => {
+  const { tier } = req.body;
+  const validTiers = ["basic", "premium", "plus"];
+  
+  if (!validTiers.includes(tier)) {
+    return res.status(400).json({ message: "Invalid membership tier." });
+  }
+
+  let account = await User.findById(req.user._id);
+  let isLawyerAccount = false;
+
+  if (!account) {
+    account = await Lawyer.findById(req.user._id);
+    isLawyerAccount = true;
+  }
+
+  if (!account) {
+    return res.status(404).json({ message: "Account not found." });
+  }
+
+  account.membershipTier = tier;
+  await account.save();
+
+  // Cross-update if linked
+  if (isLawyerAccount && account.userId) {
+    await User.findByIdAndUpdate(account.userId, { membershipTier: tier });
+  } else if (!isLawyerAccount && account.role === "lawyer") {
+    await Lawyer.findOneAndUpdate({ userId: account._id }, { membershipTier: tier });
+  }
+
+  return res.status(200).json({ 
+    message: `Successfully upgraded to ${tier} plan.`,
+    user: {
+      id: account._id.toString(),
+      name: account.name,
+      email: account.email,
+      role: account.role,
+      membershipTier: account.membershipTier
+    }
+  });
+};
+
+const updateLawyerProfile = async (req, res) => {
+  try {
+    const { hourlyRate, baseCaseFee, bio, location, specialization, services } = req.body;
+    const lawyer = await Lawyer.findById(req.user._id);
+    if (!lawyer) {
+      return res.status(404).json({ message: "Lawyer not found." });
+    }
+
+    if (hourlyRate !== undefined) lawyer.hourlyRate = Number(hourlyRate);
+    if (baseCaseFee !== undefined) lawyer.baseCaseFee = Number(baseCaseFee);
+    if (bio !== undefined) lawyer.bio = bio;
+    if (location !== undefined) lawyer.location = location;
+    if (specialization !== undefined) lawyer.specialization = specialization;
+    if (services !== undefined) lawyer.services = services;
+
+    await lawyer.save();
+    return res.status(200).json({ message: "Profile updated successfully.", lawyer: toLawyerDto(lawyer) });
+  } catch (error) {
+    console.error("Error updating lawyer profile:", error);
+    return res.status(500).json({ message: "Failed to update profile." });
+  }
+};
+
 export {
   addCaseTimelineEvent,
+  addCaseHearing,
+  updateHearingStatus,
   createCase,
   createLawyerSlot,
   createMessage,
   deleteLawyerByAdmin,
+  deleteUserByAdmin,
   deleteLawyerSlot,
   deleteLawyerSlotByAdmin,
   getAdminOverview,
@@ -849,10 +1218,14 @@ export {
   getLawyerSlots,
   getLawyers,
   getMessages,
+  payCaseFee,
   submitReview,
   updateCaseStatus,
   updateCaseTimelineEvent,
   updateLawyerSlot,
   updateLawyerVerification,
   updateTransactionStatus,
+  updateMembershipTier,
+  updateCaseFee,
+  updateLawyerProfile,
 };

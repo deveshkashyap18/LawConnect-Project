@@ -9,6 +9,8 @@ import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { useState } from "react";
+import { createSubscriptionOrder, verifySubscriptionPayment, updateMembershipTier } from "@/lib/dataService";
 
 const clientPlans = [
   {
@@ -37,59 +39,32 @@ const clientPlans = [
       "Booking and notification history tracking",
     ],
   },
-  {
-    tier: "business",
-    name: "Business",
-    price: 1499,
-    description: "For founders, teams, and repeat clients managing ongoing legal work.",
-    features: [
-      "Everything in Client Plus",
-      "Multiple concurrent legal matters",
-      "Priority lawyer discovery placement",
-      "Centralized document coordination",
-      "Faster support response window",
-    ],
-  },
 ];
 
 const lawyerPlans = [
   {
-    tier: "listing",
-    name: "Listing",
+    tier: "basic",
+    name: "Basic Plan",
     price: 0,
-    description: "For lawyers who want a verified profile and manual consultation scheduling.",
+    description: "Standard listing and case management for all legal practitioners.",
     features: [
-      "Create a public lawyer profile",
-      "Display experience, city, and specialization",
-      "Accept consultation requests",
-      "Basic booking and review visibility",
+      "Standard search visibility",
+      "10% Platform commission on bookings",
+      "Standard consultation slots",
+      "Complete case management tools",
     ],
   },
   {
-    tier: "professional",
-    name: "Professional",
+    tier: "premium",
+    name: "Premium Plan",
     price: 999,
-    description: "For active practitioners who want to manage leads and slots more efficiently.",
+    description: "Featured positioning and maximum platform advantages.",
     recommended: true,
     features: [
-      "Priority listing in search results",
-      "Slot management and consultation workflow",
-      "Client messaging after confirmed booking",
-      "Booking insights and response tracking",
-      "Higher profile visibility for verified accounts",
-    ],
-  },
-  {
-    tier: "chambers",
-    name: "Chambers",
-    price: 2499,
-    description: "For high-volume lawyers and boutique firms handling regular intake through LAWCONNECT.",
-    features: [
-      "Everything in Professional",
-      "Enhanced profile branding",
-      "Lead prioritization support",
-      "Dedicated onboarding assistance",
-      "Advanced visibility for premium practice areas",
+      "0% Platform Commission (Keep 100% of fee!)",
+      "Featured Search Listing (Top placement)",
+      "VIP Premium Profile Badge",
+      "Priority customer support",
     ],
   },
 ];
@@ -121,9 +96,80 @@ const formatPrice = (price) => (price === 0 ? "Free" : `Rs ${price.toLocaleStrin
 
 const Pricing = () => {
   const { currentUser } = useAuth();
+  const [isUpdating, setIsUpdating] = useState(false);
+  const defaultTab = currentUser?.role === "lawyer" ? "lawyer" : "client";
 
-  const handleSubscribe = (planName) => {
-    toast.success(`${planName} plan selected.`);
+  const handleSubscribe = async (plan) => {
+    if (!currentUser) {
+      toast.error("Please login to choose a membership plan.");
+      return;
+    }
+
+    if (plan.price === 0) {
+      try {
+        setIsUpdating(true);
+        await updateMembershipTier(plan.tier);
+        toast.success(`Successfully switched to ${plan.name}!`);
+        setTimeout(() => {
+          window.location.href = "/";
+        }, 1500);
+      } catch (err) {
+        toast.error("Failed to update plan.");
+      } finally {
+        setIsUpdating(false);
+      }
+      return;
+    }
+
+    // Razorpay checkout flow for premium or plus subscription
+    if (plan.tier === "premium" || plan.tier === "plus") {
+      try {
+        setIsUpdating(true);
+        const order = await createSubscriptionOrder(plan.tier);
+        
+        const options = {
+          key: order.keyId,
+          amount: order.amount,
+          currency: order.currency,
+          name: plan.tier === "premium" ? "LawConnect Premium" : "Client Plus Plan",
+          description: plan.tier === "premium" ? "1 Month Premium Membership Subscription" : "1 Month Client Plus Membership Subscription",
+          order_id: order.orderId,
+          handler: async (response) => {
+            try {
+              const verificationPayload = {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                plan: plan.tier,
+              };
+              await verifySubscriptionPayment(verificationPayload);
+              toast.success(`Successfully upgraded to ${plan.name}!`);
+              setTimeout(() => {
+                window.location.href = "/";
+              }, 1500);
+            } catch (err) {
+              toast.error(err.message || "Verification failed. Please contact support.");
+            } finally {
+              setIsUpdating(false);
+            }
+          },
+          prefill: {
+            name: currentUser?.name || "",
+            email: currentUser?.email || "",
+          },
+          theme: {
+            color: "#0f172a",
+          },
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+      } catch (error) {
+        toast.error(error.message || `Failed to initiate ${plan.name} upgrade.`);
+        setIsUpdating(false);
+      }
+      return;
+    }
   };
 
   return (
@@ -161,131 +207,187 @@ const Pricing = () => {
             })}
           </div>
 
-          <Tabs defaultValue="client" className="w-full">
+          <Tabs defaultValue={defaultTab} className="w-full">
+          {currentUser ? (
+            <div className="text-center mb-10">
+              <h2 className="text-3xl font-bold">Available Plans for {currentUser.role === 'lawyer' ? 'Lawyers' : 'Clients'}</h2>
+              <p className="text-muted-foreground mt-2">Choose the best plan for your legal practice and needs.</p>
+            </div>
+          ) : (
             <TabsList className="mx-auto mb-12 grid w-full max-w-md grid-cols-2">
               <TabsTrigger value="client">For Clients</TabsTrigger>
               <TabsTrigger value="lawyer">For Lawyers</TabsTrigger>
             </TabsList>
+          )}
 
-            <TabsContent value="client">
-              <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {( !currentUser || currentUser.role === 'client' ) && (
+            <TabsContent value="client" forceMount={currentUser?.role === 'client' ? true : undefined}>
+              <div className="mx-auto grid max-w-4xl gap-8 sm:grid-cols-2">
                 {clientPlans.map((plan) => (
-                  <Card key={plan.tier} className={`relative ${plan.recommended ? "border-primary shadow-lg" : ""}`}>
+                  <Card 
+                    key={plan.tier} 
+                    className={`relative transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl ${
+                      plan.recommended 
+                        ? "border-primary/50 bg-primary/[0.02] shadow-md shadow-primary/5" 
+                        : "border-border bg-card/40"
+                    }`}
+                  >
                     {plan.recommended ? (
                       <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                        <Badge className="gradient-premium text-white">
-                          <Crown className="mr-1 h-3 w-3" />
+                        <Badge className="bg-gradient-to-r from-primary to-primary-hover border-none text-white font-extrabold shadow-md py-1 px-3">
+                          <Crown className="mr-1 h-3.5 w-3.5" />
                           Recommended
                         </Badge>
                       </div>
                     ) : null}
-                    <CardHeader>
-                      <CardTitle className="text-2xl">{plan.name}</CardTitle>
-                      <CardDescription>{plan.description}</CardDescription>
-                      <div className="pt-4 text-4xl font-bold text-foreground">{formatPrice(plan.price)}</div>
+                    <CardHeader className="pt-8">
+                      <CardTitle className="text-2xl font-extrabold tracking-tight">{plan.name}</CardTitle>
+                      <CardDescription className="min-h-[40px] mt-2">{plan.description}</CardDescription>
+                      <div className="pt-4 flex items-baseline gap-1">
+                        <span className="text-4xl font-black text-foreground">
+                          {plan.price === 0 ? "Free" : `₹${plan.price}`}
+                        </span>
+                        {plan.price > 0 && <span className="text-sm text-muted-foreground">/mo</span>}
+                      </div>
                     </CardHeader>
-                    <CardContent>
-                      <ul className="mb-6 space-y-3">
+                    <CardContent className="pb-8">
+                      <ul className="mb-6 space-y-3 min-h-[160px]">
                         {plan.features.map((feature) => (
                           <li key={feature} className="flex items-start gap-2">
                             <Check className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-                            <span className="text-sm">{feature}</span>
+                            <span className="text-sm text-muted-foreground">{feature}</span>
                           </li>
                         ))}
                       </ul>
                       <Button
-                        className="w-full"
+                        className={`w-full py-6 font-bold text-sm tracking-wide transition-all ${
+                          plan.recommended 
+                            ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/20" 
+                            : "variant-outline"
+                        }`}
                         variant={plan.recommended ? "default" : "outline"}
-                        onClick={() => handleSubscribe(plan.name)}
+                        disabled={isUpdating || currentUser?.membershipTier === plan.tier}
+                        onClick={() => handleSubscribe(plan)}
                       >
-                        {plan.price === 0 ? "Start Free" : "Choose Plan"}
+                        {!currentUser 
+                          ? (plan.price === 0 ? "Start Free" : "Join Now")
+                          : (currentUser?.membershipTier === plan.tier 
+                            ? "Current Plan" 
+                            : plan.price === 0 ? "Start Free" : "Upgrade Plan")}
                       </Button>
                     </CardContent>
                   </Card>
                 ))}
               </div>
             </TabsContent>
+          )}
 
-            <TabsContent value="lawyer">
-              <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {( !currentUser || currentUser.role === 'lawyer' ) && (
+            <TabsContent value="lawyer" forceMount={currentUser?.role === 'lawyer' ? true : undefined}>
+              <div className="mx-auto grid max-w-4xl gap-8 sm:grid-cols-2">
                 {lawyerPlans.map((plan) => (
-                  <Card key={plan.tier} className={`relative ${plan.recommended ? "border-primary shadow-lg" : ""}`}>
+                  <Card 
+                    key={plan.tier} 
+                    className={`relative transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl ${
+                      plan.recommended 
+                        ? "border-yellow-500/50 bg-yellow-500/[0.02] shadow-md shadow-yellow-500/5" 
+                        : "border-border bg-card/40"
+                    }`}
+                  >
                     {plan.recommended ? (
                       <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-                        <Badge className="gradient-premium text-white">
-                          <Crown className="mr-1 h-3 w-3" />
+                        <Badge className="bg-gradient-to-r from-yellow-500 to-amber-600 border-none text-slate-900 font-extrabold shadow-md py-1 px-3">
+                          <Crown className="mr-1 h-3.5 w-3.5 fill-slate-900" />
                           Recommended
                         </Badge>
                       </div>
                     ) : null}
-                    <CardHeader>
-                      <CardTitle className="text-2xl">{plan.name}</CardTitle>
-                      <CardDescription>{plan.description}</CardDescription>
-                      <div className="pt-4 text-4xl font-bold text-foreground">{formatPrice(plan.price)}</div>
+                    <CardHeader className="pt-8">
+                      <CardTitle className={`text-2xl font-extrabold tracking-tight ${plan.recommended ? "text-yellow-600 dark:text-yellow-400" : ""}`}>
+                        {plan.name}
+                      </CardTitle>
+                      <CardDescription className="min-h-[40px] mt-2">{plan.description}</CardDescription>
+                      <div className="pt-4 flex items-baseline gap-1">
+                        <span className="text-4xl font-black text-foreground">
+                          {plan.price === 0 ? "Free" : `₹${plan.price}`}
+                        </span>
+                        {plan.price > 0 && <span className="text-sm text-muted-foreground">/mo</span>}
+                      </div>
                     </CardHeader>
-                    <CardContent>
-                      <ul className="mb-6 space-y-3">
+                    <CardContent className="pb-8">
+                      <ul className="mb-6 space-y-3 min-h-[160px]">
                         {plan.features.map((feature) => (
                           <li key={feature} className="flex items-start gap-2">
                             <Check className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-                            <span className="text-sm">{feature}</span>
+                            <span className="text-sm text-muted-foreground">{feature}</span>
                           </li>
                         ))}
                       </ul>
                       <Button
-                        className="w-full"
+                        className={`w-full py-6 font-bold text-sm tracking-wide transition-all ${
+                          plan.recommended 
+                            ? "bg-yellow-500 text-slate-950 hover:bg-yellow-600 shadow-lg shadow-yellow-500/20" 
+                            : "variant-outline"
+                        }`}
                         variant={plan.recommended ? "default" : "outline"}
-                        onClick={() => handleSubscribe(plan.name)}
+                        disabled={isUpdating || currentUser?.membershipTier === plan.tier}
+                        onClick={() => handleSubscribe(plan)}
                       >
-                        {plan.price === 0 ? "Stay on Free Listing" : "Upgrade Plan"}
+                        {!currentUser 
+                          ? (plan.price === 0 ? "Join as Lawyer" : "Upgrade Practice")
+                          : (currentUser?.membershipTier === plan.tier 
+                            ? "Current Plan" 
+                            : plan.price === 0 ? "Stay on Free Plan" : "Upgrade Plan")}
                       </Button>
                     </CardContent>
                   </Card>
                 ))}
               </div>
 
-              <div className="mx-auto mt-10 grid max-w-6xl gap-6 lg:grid-cols-3">
-                <Card className="lg:col-span-2">
-                  <CardHeader>
-                    <CardTitle>Your current consultation fee</CardTitle>
-                    <CardDescription>
-                      This fee is shown to clients when they open your profile and booking slots.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                      <div className="text-5xl font-bold text-foreground">
-                        Rs {Number(currentUser?.hourlyRate || 0).toLocaleString("en-IN")}
-                        <span className="text-lg font-normal text-muted-foreground">/hr</span>
+              {currentUser?.role === 'lawyer' && (
+                <div className="mx-auto mt-10 grid max-w-6xl gap-6 lg:grid-cols-3">
+                  <Card className="lg:col-span-2">
+                    <CardHeader>
+                      <CardTitle>Your current consultation fee</CardTitle>
+                      <CardDescription>
+                        This fee is shown to clients when they open your profile and booking slots.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-wrap items-end justify-between gap-4">
+                      <div>
+                        <div className="text-5xl font-bold text-foreground">
+                          Rs {Number(currentUser?.hourlyRate || 0).toLocaleString("en-IN")}
+                          <span className="text-lg font-normal text-muted-foreground">/hr</span>
+                        </div>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {currentUser?.specialization?.join(", ") ||
+                            "Update specialization and fee from your lawyer dashboard/profile."}
+                        </p>
                       </div>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        {currentUser?.specialization?.join(", ") ||
-                          "Update specialization and fee from your lawyer dashboard/profile."}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Link to="/lawyer/dashboard">
-                        <Button>Manage Slots</Button>
-                      </Link>
-                      <Link to="/settings">
-                        <Button variant="outline">Open Settings</Button>
-                      </Link>
-                    </div>
-                  </CardContent>
-                </Card>
+                      <div className="flex flex-wrap gap-2">
+                        <Link to="/lawyer/dashboard">
+                          <Button>Manage Slots</Button>
+                        </Link>
+                        <Link to="/settings">
+                          <Button variant="outline">Open Settings</Button>
+                        </Link>
+                      </div>
+                    </CardContent>
+                  </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Who should upgrade?</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm text-muted-foreground">
-                    <p>Choose Professional if you regularly receive consultation requests and need better profile visibility.</p>
-                    <p>Choose Chambers if your practice handles frequent platform leads and premium listing matters.</p>
-                    <p>Free Listing is enough if you only want a basic presence and occasional bookings.</p>
-                  </CardContent>
-                </Card>
-              </div>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Who should upgrade?</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm text-muted-foreground">
+                      <p>Choose Premium if you regularly receive consultation requests and want to keep 100% of your earnings with 0% platform commission.</p>
+                      <p>Basic Plan is enough if you only want a standard presence and occasional case management.</p>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
             </TabsContent>
+          )}
           </Tabs>
         </section>
       </div>

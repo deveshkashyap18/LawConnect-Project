@@ -18,8 +18,11 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
 import { CaseUpdateDialog } from "@/components/CaseUpdateDialog";
+import { CaseHearingDialog } from "@/components/CaseHearingDialog";
 import { TimelineEventEditDialog } from "@/components/TimelineEventEditDialog";
 import {
+  addCaseHearing,
+  updateHearingStatus,
   addCaseTimelineEvent,
   updateCaseTimelineEvent,
   createLawyerSlot,
@@ -32,6 +35,11 @@ import {
   updateCaseStatus,
   updateLawyerSlot,
   uploadDocument,
+  updateLawyerProfile,
+  updateCaseFee,
+  createSubscriptionOrder,
+  verifySubscriptionPayment,
+  updateMembershipTier,
 } from "@/lib/dataService";
 import { socket } from "@/lib/socketClient";
 import {
@@ -55,7 +63,9 @@ import {
   Zap,
   Download,
   FileText,
-  Calendar as CalendarIcon
+  Calendar as CalendarIcon,
+  ArrowRight,
+  Edit2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -64,16 +74,125 @@ const formatCurrency = (value) => `INR ${Number(value || 0).toLocaleString("en-I
 const LawyerDashboard = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  
+  const handleUpdateRate = async (newRate) => {
+    try {
+      await updateLawyerProfile({ hourlyRate: newRate });
+      toast.success(`Consultation rate updated to INR ${newRate}`);
+      setTimeout(() => window.location.reload(), 1000); 
+    } catch (error) {
+      toast.error(error.message || "Failed to update rate.");
+    }
+  };
+
+  const handleUpdateFee = async (caseId, newFee) => {
+    try {
+      await updateCaseFee(caseId, newFee);
+      toast.success(`Case fee updated to INR ${newFee}`);
+      const updated = await fetchCases().catch(() => null);
+      if (updated) setLawyerCases(updated);
+    } catch (error) {
+      toast.error(error.message || "Failed to update case fee.");
+    }
+  };
+
+  const handleUpgradeToPremium = async () => {
+    try {
+      const order = await createSubscriptionOrder("premium");
+      
+      const options = {
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "LawConnect Premium",
+        description: "1 Month Premium Membership Subscription",
+        order_id: order.orderId,
+        handler: async (response) => {
+          try {
+            const verificationPayload = {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            };
+            await verifySubscriptionPayment(verificationPayload);
+            toast.success("Successfully upgraded to Premium!");
+            setTimeout(() => window.location.reload(), 1000);
+          } catch (err) {
+            toast.error(err.message || "Verification failed. Please contact support.");
+          }
+        },
+        prefill: {
+          name: currentUser?.name || "",
+          email: currentUser?.email || "",
+        },
+        theme: {
+          color: "#0f172a",
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (error) {
+      toast.error(error.message || "Failed to initiate premium upgrade.");
+    }
+  };
+
+  const handleDowngradeToBasic = async () => {
+    try {
+      await updateMembershipTier("basic");
+      toast.success("Subscription downgraded to Basic successfully.");
+      setTimeout(() => window.location.reload(), 1000);
+    } catch (err) {
+      toast.error("Failed to downgrade subscription.");
+    }
+  };
+
   const [lawyerCases, setLawyerCases] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [slots, setSlots] = useState([]);
-  const [earningsData, setEarningsData] = useState({ totalEarnings: 0, thisMonthEarnings: 0, transactionsCount: 0 });
+  const [earningsData, setEarningsData] = useState({ 
+    totalEarnings: 0, 
+    consultationEarnings: 0,
+    caseEarnings: 0,
+    thisMonthEarnings: 0, 
+    transactionsCount: 0,
+    consultationsCount: 0,
+    casesCount: 0,
+    reputationScore: 0,
+    rating: 0,
+    totalReviews: 0
+  });
   const [isLoadingCases, setIsLoadingCases] = useState(true);
-  const [slotForm, setSlotForm] = useState({ date: "", startTime: "10:00", endTime: "10:45" });
+  const [slotForm, setSlotForm] = useState({ date: "", startTime: "10:00", endTime: "11:00" });
   const [editingSlotId, setEditingSlotId] = useState("");
   const [uploadingCaseId, setUploadingCaseId] = useState(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [newService, setNewService] = useState({ name: "", fee: "" });
   const fileInputRef = useRef(null);
+
+  const handleAddService = async () => {
+    if (!newService.name || !newService.fee) return toast.error("Please fill all fields");
+    const updatedServices = [...(currentUser?.services || []), { ...newService, fee: Number(newService.fee) }];
+    try {
+      await updateLawyerProfile({ services: updatedServices });
+      toast.success("Service added successfully");
+      setNewService({ name: "", fee: "" });
+      setTimeout(() => window.location.reload(), 1000);
+    } catch (err) {
+      toast.error("Failed to add service");
+    }
+  };
+
+  const handleRemoveService = async (serviceId) => {
+    const updatedServices = currentUser.services.filter(s => s.id !== serviceId);
+    try {
+      await updateLawyerProfile({ services: updatedServices });
+      toast.success("Service removed");
+      setTimeout(() => window.location.reload(), 1000);
+    } catch (err) {
+      toast.error("Failed to remove service");
+    }
+  };
 
   // verified comes from the lawyer profile via hydrateUser in authController
   const isVerifiedLawyer = currentUser?.verified === true;
@@ -118,9 +237,13 @@ const LawyerDashboard = () => {
     socket.emit("join", currentUser.id);
 
     const handleSocketUpdate = (updatedCase) => {
-      setLawyerCases((prev) =>
-        prev.map((c) => (c.id === updatedCase.id ? updatedCase : c))
-      );
+      setLawyerCases((prev) => {
+        const exists = prev.some((c) => c.id === updatedCase.id);
+        if (exists) {
+          return prev.map((c) => (c.id === updatedCase.id ? updatedCase : c));
+        }
+        return [updatedCase, ...prev];
+      });
     };
 
     socket.on("case_update", handleSocketUpdate);
@@ -143,6 +266,28 @@ const LawyerDashboard = () => {
       socket.off("booking_updated", handleBookingUpdate);
     };
   }, [currentUser?.id, isVerifiedLawyer]);
+
+  const handleAddHearing = async (caseId, hearingData) => {
+    try {
+      const updated = await addCaseHearing(caseId, hearingData);
+      setLawyerCases((prev) => prev.map((c) => (c.id === caseId ? updated : c)));
+      toast.success("Hearing scheduled successfully!");
+    } catch (e) {
+      toast.error(e.message || "Failed to schedule hearing.");
+      throw e;
+    }
+  };
+
+  const handleUpdateHearingStatus = async (caseId, hearingId, status) => {
+    try {
+      const updated = await updateHearingStatus(caseId, hearingId, status);
+      setLawyerCases((prev) => prev.map((c) => (c.id === caseId ? updated : c)));
+      toast.success(`Hearing marked as ${status}.`);
+    } catch (e) {
+      toast.error(e.message || "Failed to update hearing status.");
+    }
+  };
+
   const handleDownload = (url, filename) => {
     if (!url) return;
     const link = document.createElement("a");
@@ -161,16 +306,17 @@ const LawyerDashboard = () => {
 
   const stats = {
     totalEarnings: earningsData.totalEarnings || 0,
+    consultationEarnings: earningsData.consultationEarnings || 0,
+    caseEarnings: earningsData.caseEarnings || 0,
     thisMonthEarnings: earningsData.thisMonthEarnings || 0,
     activeCases: lawyerCases.filter((c) => c.status === "active").length,
-    // Use real rating/reviews/reputation from lawyer profile (via hydrateUser)
-    rating: currentUser?.rating ?? 0,
-    totalReviews: currentUser?.totalReviews ?? 0,
-    reputationScore: currentUser?.reputationScore ?? 0,
+    rating: earningsData.rating || currentUser?.rating || 0,
+    totalReviews: earningsData.totalReviews || currentUser?.totalReviews || 0,
+    reputationScore: earningsData.reputationScore || 0,
   };
 
   const resetSlotForm = () => {
-    setSlotForm({ date: "", startTime: "10:00", endTime: "10:45" });
+    setSlotForm({ date: "", startTime: "10:00", endTime: "11:00" });
     setEditingSlotId("");
   };
 
@@ -330,7 +476,7 @@ const LawyerDashboard = () => {
       const next = { ...prev };
       if (type === "start") {
         next.startTime = new24h;
-        if (!editingSlotId) next.endTime = addMinutesToTime(new24h, 45);
+        if (!editingSlotId) next.endTime = addMinutesToTime(new24h, 60);
       } else {
         next.endTime = new24h;
       }
@@ -396,6 +542,19 @@ const LawyerDashboard = () => {
   };
 
   const handleBookingStatusChange = async (bookingId, status) => {
+    if (status === "approved" && currentUser?.membershipTier === "basic") {
+      const activeOrApprovedCount = bookings.filter(
+        (b) => b.status === "approved" || b.status === "completed" || b.status === "paid"
+      ).length;
+      if (activeOrApprovedCount >= 1) {
+        toast.error("Under the free Basic Plan, you can only approve exactly 1 consultation. Please upgrade to Premium.");
+        setTimeout(() => {
+          window.location.href = "/pricing";
+        }, 1500);
+        return;
+      }
+    }
+
     try {
       const updatedBooking = await updateBookingStatus(bookingId, status);
       setBookings((prev) =>
@@ -527,6 +686,7 @@ const LawyerDashboard = () => {
                 </div>
               </CardContent>
             </Card>
+
           </div>
 
           {/* Reputation Progress Bar */}
@@ -548,20 +708,27 @@ const LawyerDashboard = () => {
             </CardContent>
           </Card>
 
+
+
+
+
           <Tabs defaultValue="cases" className="w-full">
-            <TabsList>
+            <TabsList className="mb-6 flex-wrap h-auto gap-1">
               <TabsTrigger value="cases">My Cases</TabsTrigger>
               <TabsTrigger value="slots">Manage Slots</TabsTrigger>
               <TabsTrigger value="bookings">Bookings</TabsTrigger>
               <TabsTrigger value="requests" className="relative">
                 Consultation Requests
                 {pendingBookings.length > 0 && (
-                  <Badge variant="destructive" className="ml-2 px-1.5 py-0 min-w-[20px] h-5 flex items-center justify-center text-[10px] animate-pulse">
+                  <span className="ml-2 bg-destructive text-destructive-foreground text-[10px] rounded-full h-4 w-4 flex items-center justify-center">
                     {pendingBookings.length}
-                  </Badge>
+                  </span>
                 )}
               </TabsTrigger>
               <TabsTrigger value="earnings">Earnings</TabsTrigger>
+              <TabsTrigger value="fees" className="bg-primary/5 text-primary data-[state=active]:bg-primary data-[state=active]:text-white transition-all">
+                Fees & Pricing
+              </TabsTrigger>
               <TabsTrigger value="profile">Profile</TabsTrigger>
             </TabsList>
 
@@ -585,6 +752,16 @@ const LawyerDashboard = () => {
                             <Badge variant={caseItem.status === "active" ? "default" : "secondary"}>
                               {caseItem.status}
                             </Badge>
+                            {caseItem.paymentStatus === "paid" && (
+                              <Badge className="bg-green-600 hover:bg-green-700 text-white border-none text-[10px] h-5">
+                                Fee Paid
+                              </Badge>
+                            )}
+                            {caseItem.status === "closed" && caseItem.paymentStatus === "unpaid" && (
+                              <Badge variant="outline" className="text-orange-600 border-orange-600 text-[10px] h-5">
+                                Fee Pending
+                              </Badge>
+                            )}
                             {caseItem.status === "pending" && (
                               <div className="flex gap-1">
                                 <Button
@@ -658,20 +835,67 @@ const LawyerDashboard = () => {
                           </div>
                         )}
 
+                        {/* Case Hearings */}
+                        {caseItem.hearingDates && caseItem.hearingDates.length > 0 && (
+                          <div className="mb-6 pt-4 border-t">
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">Scheduled Hearings</h4>
+                            <div className="space-y-2">
+                              {caseItem.hearingDates.sort((a,b) => new Date(a.date) - new Date(b.date)).map((h, idx) => (
+                                <div key={h.id || `hearing-${idx}`} className="flex items-center justify-between p-3 border rounded-lg bg-muted/30">
+                                  <div>
+                                    <p className="font-bold">{h.title}</p>
+                                    <p className="text-sm text-muted-foreground">{h.date} @ {h.location}</p>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    {h.status === "completed" ? (
+                                      <Badge variant="default" className="bg-green-600 hover:bg-green-600 text-white gap-1">
+                                        <CheckCircle className="h-3 w-3" />
+                                        Completed
+                                      </Badge>
+                                    ) : (
+                                      <Button 
+                                        size="sm" 
+                                        variant="outline"
+                                        className="h-8 px-3 border-primary text-primary hover:bg-primary hover:text-white transition-all font-medium"
+                                        onClick={() => handleUpdateHearingStatus(caseItem.id, h.id, "completed")}
+                                      >
+                                        Mark Done
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Case Timeline */}
                         {caseItem.timeline && caseItem.timeline.length > 0 && (
                           <div className="mb-6 pt-4 border-t">
                             <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4">Case Timeline</h4>
                             <div className="space-y-4">
-                              {caseItem.timeline.map((event) => (
-                                <div key={event.id} className="flex gap-4 group">
+                              {caseItem.timeline.map((event) => {
+                                // Translate event text for Lawyer
+                                let displayTitle = event.title;
+                                let displayDesc = event.description;
+                                
+                                if (event.title === "Consultation Request Sent") {
+                                  displayTitle = "New Case Request Received";
+                                  displayDesc = "A client has sent you a new case request. Please review and accept to start.";
+                                } else if (event.title === "Payment Verified") {
+                                  displayTitle = "Payment Received";
+                                  displayDesc = "Payment for this case has been successfully received in your account.";
+                                }
+
+                                return (
+                                  <div key={event.id} className="flex gap-4 group">
                                   <div className="flex flex-col items-center">
                                     <div className="w-2.5 h-2.5 rounded-full bg-primary ring-4 ring-primary/10" />
                                     <div className="w-px h-full bg-border mt-2" />
                                   </div>
                                   <div className="flex-1 pb-4">
                                     <div className="flex items-start justify-between">
-                                      <p className="text-lg font-bold">{event.title}</p>
+                                      <p className="text-lg font-bold">{displayTitle}</p>
                                       {event.addedByRole === "lawyer" && (
                                         <TimelineEventEditDialog
                                           event={event}
@@ -679,14 +903,15 @@ const LawyerDashboard = () => {
                                         />
                                       )}
                                     </div>
-                                    <p className="text-base text-muted-foreground mt-1 leading-relaxed">{event.description}</p>
+                                    <p className="text-base text-muted-foreground mt-1 leading-relaxed">{displayDesc}</p>
                                     <p className="text-sm text-muted-foreground/60 mt-2">{event.date}</p>
                                   </div>
                                 </div>
-                              ))}
-                            </div>
+                              );
+                            })}
                           </div>
-                        )}
+                        </div>
+                      )}
 
                         <div className="flex gap-2 flex-wrap">
                           <Button 
@@ -698,6 +923,7 @@ const LawyerDashboard = () => {
                             <MessageSquare className="h-4 w-4 mr-2" />
                             Message Client
                           </Button>
+
                           <CaseUpdateDialog
                             caseId={caseItem.id}
                             caseTitle={caseItem.title}
@@ -708,14 +934,21 @@ const LawyerDashboard = () => {
                                   title: "Lawyer Update",
                                   description: update,
                                   type: "update",
+                                  addedByRole: "lawyer",
                                 });
                                 setLawyerCases((prev) =>
                                   prev.map((c) => (c.id === caseId ? updated : c))
                                 );
                               } catch (e) {
                                 toast.error(e.message || "Failed to add update.");
+                                throw e;
                               }
                             }}
+                          />
+                          <CaseHearingDialog 
+                            caseId={caseItem.id}
+                            disabled={caseItem.status !== "active"}
+                            onAddHearing={handleAddHearing}
                           />
                           <Button
                             variant="outline"
@@ -999,7 +1232,7 @@ const LawyerDashboard = () => {
                     <CardTitle>Earnings Overview</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="flex items-center justify-between p-4 border rounded-lg">
                         <div>
                           <p className="text-sm text-muted-foreground">This Month</p>
@@ -1007,7 +1240,7 @@ const LawyerDashboard = () => {
                         </div>
                         <TrendingUp className="h-8 w-8 text-success" />
                       </div>
-                      <div className="flex items-center justify-between p-4 border rounded-lg">
+                      <div className="flex items-center justify-between p-4 border rounded-lg bg-primary/5">
                         <div>
                           <p className="text-sm text-muted-foreground">Total Earnings</p>
                           <p className="text-2xl font-bold">{formatCurrency(stats.totalEarnings)}</p>
@@ -1016,41 +1249,181 @@ const LawyerDashboard = () => {
                       </div>
                       <div className="flex items-center justify-between p-4 border rounded-lg">
                         <div>
+                          <p className="text-sm text-muted-foreground">Consultation Earnings</p>
+                          <p className="text-2xl font-bold">{formatCurrency(stats.consultationEarnings)}</p>
+                        </div>
+                        <IndianRupee className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <p className="text-sm text-muted-foreground">Case Earnings</p>
+                          <p className="text-2xl font-bold">{formatCurrency(stats.caseEarnings)}</p>
+                        </div>
+                        <IndianRupee className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
                           <p className="text-sm text-muted-foreground">Completed Consultations</p>
-                          <p className="text-2xl font-bold">{earningsData.transactionsCount}</p>
+                          <p className="text-2xl font-bold">{earningsData.consultationsCount || 0}</p>
                         </div>
                         <Users className="h-8 w-8 text-primary" />
+                      </div>
+                      <div className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <p className="text-sm text-muted-foreground">Completed Cases</p>
+                          <p className="text-2xl font-bold">{earningsData.casesCount || 0}</p>
+                        </div>
+                        <Briefcase className="h-8 w-8 text-primary" />
                       </div>
                     </div>
                   </CardContent>
                 </Card>
 
-                <Card>
+                <Card className="border-primary/20 shadow-lg">
                   <CardHeader>
-                    <CardTitle>Membership & Commission</CardTitle>
+                    <CardTitle className="flex items-center gap-2">
+                      <Star className="h-5 w-5 text-yellow-500 fill-yellow-500" />
+                      <span>Membership Plans</span>
+                    </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="text-center py-8">
-                      <div className="text-5xl font-bold gradient-premium bg-clip-text text-transparent mb-2">
-                        {membershipLabel}
+                  <CardContent className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Basic Plan Column */}
+                      <div className="border rounded-xl p-4 flex flex-col justify-between bg-muted/10 relative">
+                        {currentUser?.membershipTier !== "premium" && (
+                          <Badge className="absolute top-2 right-2 bg-primary text-white text-[10px] font-bold">
+                            Active
+                          </Badge>
+                        )}
+                        <div>
+                          <p className="font-bold text-lg">Basic Plan</p>
+                          <p className="text-2xl font-black mt-1 text-foreground">₹0 <span className="text-xs font-normal text-muted-foreground">/mo</span></p>
+                          <ul className="mt-4 space-y-2 text-xs text-muted-foreground">
+                            <li className="flex items-center gap-1.5">✕ 10% Platform Commission</li>
+                            <li className="flex items-center gap-1.5">✓ Standard Visibility</li>
+                            <li className="flex items-center gap-1.5">✓ Standard Consultation Slots</li>
+                            <li className="flex items-center gap-1.5">✓ Case Management</li>
+                          </ul>
+                        </div>
+                        {currentUser?.membershipTier === "premium" && (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="mt-4 w-full text-xs"
+                            onClick={handleDowngradeToBasic}
+                          >
+                            Downgrade to Basic
+                          </Button>
+                        )}
                       </div>
-                      <p className="text-lg font-semibold mb-2">Membership Tier</p>
-                      <Badge className="gradient-premium">{membershipLabel} Member</Badge>
-                      <div className="mt-6 text-left space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Bar ID</span>
-                          <span className="font-medium">{currentUser?.barId || "—"}</span>
+
+                      {/* Premium Plan Column */}
+                      <div className="border border-yellow-500/30 rounded-xl p-4 flex flex-col justify-between bg-yellow-500/5 relative shadow-sm">
+                        {currentUser?.membershipTier === "premium" && (
+                          <Badge className="absolute top-2 right-2 bg-yellow-500 text-slate-900 text-[10px] font-extrabold hover:bg-yellow-500">
+                            Active
+                          </Badge>
+                        )}
+                        <div>
+                          <p className="font-bold text-lg text-yellow-600 flex items-center gap-1">
+                            Premium Plan
+                          </p>
+                          <p className="text-2xl font-black mt-1 text-foreground">₹999 <span className="text-xs font-normal text-muted-foreground">/mo</span></p>
+                          <ul className="mt-4 space-y-2 text-xs text-slate-700 dark:text-slate-300">
+                            <li className="flex items-center gap-1.5 font-semibold text-green-600 dark:text-green-400">✓ 0% Platform Commission</li>
+                            <li className="flex items-center gap-1.5">✓ Featured Search Listing (Top placements!)</li>
+                            <li className="flex items-center gap-1.5">✓ VIP Premium Profile Badge</li>
+                            <li className="flex items-center gap-1.5">✓ Priority Customer Support</li>
+                          </ul>
                         </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Experience</span>
-                          <span className="font-medium">{currentUser?.experience ?? 0} years</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Hourly Rate</span>
-                          <span className="font-medium">{formatCurrency(currentUser?.hourlyRate ?? 0)}/hr</span>
-                        </div>
+                        {currentUser?.membershipTier !== "premium" ? (
+                          <Button 
+                            size="sm" 
+                            className="mt-4 w-full bg-yellow-500 text-slate-950 hover:bg-yellow-600 font-bold text-xs"
+                            onClick={handleUpgradeToPremium}
+                          >
+                            Upgrade to Premium
+                          </Button>
+                        ) : (
+                          <div className="mt-4 text-center text-xs text-yellow-600 font-bold bg-yellow-500/10 py-1.5 rounded-lg border border-yellow-500/20">
+                            You possess all Premium perks!
+                          </div>
+                        )}
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            {/* Fees & Pricing Tab */}
+            <TabsContent value="fees" className="mt-6">
+              <div className="max-w-2xl mx-auto">
+                <Card className="border-primary/20 shadow-lg">
+                  <CardHeader className="text-center">
+                    <CardTitle className="text-2xl font-bold">Manage Your Fees</CardTitle>
+                    <p className="text-muted-foreground">Set your standard professional charges</p>
+                  </CardHeader>
+                  <CardContent className="space-y-6 pt-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      {/* Consultation Fee */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-primary font-semibold">
+                          <MessageSquare className="h-5 w-5" />
+                          <span>Consultation Fee</span>
+                        </div>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">INR</span>
+                          <Input 
+                            type="number"
+                            placeholder="e.g. 500"
+                            className="pl-12 text-lg font-bold"
+                            defaultValue={currentUser?.hourlyRate}
+                            id="hourlyRateInput"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">Fixed fee for one consultation.</p>
+                      </div>
+
+                      {/* Base Case Fee */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-primary font-semibold">
+                          <Briefcase className="h-5 w-5" />
+                          <span>General Case Fee</span>
+                        </div>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">INR</span>
+                          <Input 
+                            type="number"
+                            placeholder="e.g. 10000"
+                            className="pl-12 text-lg font-bold"
+                            defaultValue={currentUser?.baseCaseFee || 5000}
+                            id="caseFeeInput"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">Starting fee for new cases.</p>
+                      </div>
+                    </div>
+
+                    <Button 
+                      className="w-full h-12 text-lg gradient-primary"
+                      onClick={async () => {
+                        const hr = document.getElementById('hourlyRateInput').value;
+                        const cf = document.getElementById('caseFeeInput').value;
+                        try {
+                          await updateLawyerProfile({ 
+                            hourlyRate: Number(hr), 
+                            baseCaseFee: Number(cf) 
+                          });
+                          toast.success("Fee structure updated!");
+                          setTimeout(() => window.location.reload(), 1000);
+                        } catch (err) {
+                          toast.error("Failed to update fees");
+                        }
+                      }}
+                    >
+                      Save Fee Structure
+                    </Button>
                   </CardContent>
                 </Card>
               </div>
@@ -1064,6 +1437,10 @@ const LawyerDashboard = () => {
                     <CardTitle>Professional Details</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Consultation Fee</span>
+                      <span className="font-bold text-lg text-primary">INR {currentUser?.hourlyRate || 0}</span>
+                    </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Name</span>
                       <span className="font-medium">{currentUser?.name || "—"}</span>
@@ -1089,10 +1466,6 @@ const LawyerDashboard = () => {
                       <span className="font-medium text-right">
                         {currentUser?.specialization?.join(", ") || "—"}
                       </span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Hourly Rate</span>
-                      <span className="font-medium">{formatCurrency(currentUser?.hourlyRate ?? 0)}/hr</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Verification</span>

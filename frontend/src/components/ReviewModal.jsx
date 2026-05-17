@@ -6,7 +6,7 @@ import { Star } from "lucide-react";
 import { submitReview } from "@/lib/dataService";
 import { toast } from "sonner";
 
-export function ReviewModal({ lawyerId, lawyerName, onReviewSubmitted }) {
+export function ReviewModal({ lawyerId, lawyerName, bookingId, caseId, onReviewSubmitted }) {
   const [open, setOpen] = useState(false);
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
@@ -25,7 +25,13 @@ export function ReviewModal({ lawyerId, lawyerName, onReviewSubmitted }) {
 
     try {
       setIsSubmitting(true);
-      const data = await submitReview({ lawyerId, rating, comment });
+      const data = await submitReview({ 
+        lawyerId, 
+        rating, 
+        comment,
+        bookingId,
+        caseId
+      });
       toast.success("Review submitted successfully!");
       setOpen(false);
       setRating(0);

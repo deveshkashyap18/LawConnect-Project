@@ -16,6 +16,9 @@ const Toaster = ({ ...props }) => {
             "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
         },
       }}
+      style={{ zIndex: 99999 }}
+      offset={80}
+      expand={true}
       {...props}
     />
   );

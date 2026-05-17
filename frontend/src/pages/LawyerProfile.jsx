@@ -17,6 +17,11 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { fetchBookings, fetchLawyerById, createBooking } from "@/lib/dataService";
+import { 
+  loadRazorpayScript, 
+  createRazorpayOrder, 
+  verifyRazorpayPayment 
+} from "@/lib/paymentService";
 import { socket } from "@/lib/socketClient";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -31,6 +36,21 @@ const LawyerProfile = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  useEffect(() => {
+    // Load Razorpay Script
+    const loadScript = async () => {
+      try {
+        const res = await loadRazorpayScript();
+        if (!res) {
+          console.error("Razorpay SDK failed to load.");
+        }
+      } catch (err) {
+        console.error("Error loading Razorpay:", err);
+      }
+    };
+    loadScript();
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -132,6 +152,7 @@ const LawyerProfile = () => {
       </div>
     );
   }
+
   const handleBookConsultation = async (bookingData) => {
     const { slotId, date, timeSlot, notes } = bookingData;
 
@@ -146,43 +167,28 @@ const LawyerProfile = () => {
       return;
     }
 
-    if (!slotId && (!date || !timeSlot)) {
-      toast.error("Please select a date and time for your consultation.");
+    if (!currentUser?.membershipTier || (currentUser.membershipTier !== "basic" && currentUser.membershipTier !== "plus")) {
+      toast.error("Please choose a membership plan before booking a consultation.");
+      setTimeout(() => {
+        window.location.href = "/pricing";
+      }, 1500);
       return;
     }
 
     try {
       setIsSubmitting(true);
       
-      let finalSlotId = slotId;
-      if (slotId) {
-        const slot = availableSlots.find((s) => s.id === slotId);
-        if (!slot) {
-          toast.error("Selected slot is no longer available.");
-          return;
-        }
-      }
-
-      await createBooking({
+      const booking = await createBooking({
         lawyerId: lawyer.id,
-        slotId: finalSlotId,
+        slotId,
         date,
         timeSlot,
-        notes: notes || `Consultation requested from ${lawyer.name}'s profile`,
+        notes: notes || `Consultation with ${lawyer.name}`,
       });
 
-      setBookings((prev) => [
-        {
-          id: `local-${slotId || Date.now()}`,
-          lawyerId: lawyer.id,
-          status: "pending",
-        },
-        ...prev,
-      ]);
-
-      toast.success("Consultation booked successfully!");
+      toast.success("Consultation requested successfully! Please complete payment from your bookings page.");
       setIsDialogOpen(false);
-      navigate("/bookings");
+      navigate("/bookings"); 
     } catch (error) {
       toast.error(error.message || "Failed to book consultation.");
     } finally {
@@ -199,6 +205,14 @@ const LawyerProfile = () => {
 
     if (!isClient) {
       toast.error("Only client accounts can book consultations.");
+      return;
+    }
+
+    if (!currentUser?.membershipTier || (currentUser.membershipTier !== "basic" && currentUser.membershipTier !== "plus")) {
+      toast.error("Please choose a membership plan before booking a consultation.");
+      setTimeout(() => {
+        window.location.href = "/pricing";
+      }, 1500);
       return;
     }
 
@@ -355,10 +369,19 @@ const LawyerProfile = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Hourly Rate</span>
-                    <span className="font-semibold text-lg">
-                      INR {lawyer.hourlyRate.toLocaleString("en-IN")}/hr
-                    </span>
+                    <span className="text-muted-foreground">Consultation Fee</span>
+                    <div className="flex items-baseline gap-1">
+                      <span className="font-bold text-lg text-primary">₹ {lawyer.hourlyRate.toLocaleString("en-IN")}</span>
+                      <span className="text-xs text-muted-foreground">/consultation</span>
+                    </div>
+                  </div>
+                  <Separator />
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Standard Case Fee</span>
+                    <div className="flex items-baseline gap-1">
+                      <span className="font-bold text-lg text-primary">₹ {(lawyer.baseCaseFee || 5000).toLocaleString("en-IN")}</span>
+                      <span className="text-xs text-muted-foreground">/case</span>
+                    </div>
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between">

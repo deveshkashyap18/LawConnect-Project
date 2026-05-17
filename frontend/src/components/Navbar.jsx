@@ -22,8 +22,6 @@ const getPrimaryNavLinks = (role) => {
   if (role === "admin") {
     return [
       { to: "/admin/dashboard", label: "Dashboard" },
-      { to: "/admin/dashboard#bookings", label: "Bookings" },
-      { to: "/admin/dashboard#users", label: "Users" },
     ];
   }
 

@@ -40,10 +40,6 @@ const Lawyers = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSpecialization, setSelectedSpecialization] = useState("all");
   const [selectedLocation, setSelectedLocation] = useState("all");
-  const [minExperience, setMinExperience] = useState("");
-  const [minRating, setMinRating] = useState("");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
   const [lawyers, setLawyers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -57,10 +53,6 @@ const Lawyers = () => {
           q: searchQuery,
           specialization: selectedSpecialization,
           location: selectedLocation,
-          minExperience,
-          minRating,
-          minPrice,
-          maxPrice,
         });
 
         if (isMounted) {
@@ -80,16 +72,12 @@ const Lawyers = () => {
     return () => {
       isMounted = false;
     };
-  }, [searchQuery, selectedSpecialization, selectedLocation, minExperience, minRating, minPrice, maxPrice]);
+  }, [searchQuery, selectedSpecialization, selectedLocation]);
 
   const resetFilters = () => {
     setSearchQuery("");
     setSelectedSpecialization("all");
     setSelectedLocation("all");
-    setMinExperience("");
-    setMinRating("");
-    setMinPrice("");
-    setMaxPrice("");
   };
 
   const specializationOptions = useMemo(
@@ -118,7 +106,7 @@ const Lawyers = () => {
               <Badge className="mb-4">Verified Legal Professionals</Badge>
               <h1 className="mb-4 text-4xl font-bold">Find the right lawyer for your legal issue</h1>
               <p className="text-lg text-muted-foreground">
-                Filter by practice area, city, experience, rating, and consultation fee.
+                Filter by practice area, city, or search by name.
               </p>
             </div>
 
@@ -134,8 +122,8 @@ const Lawyers = () => {
                   </Button>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="xl:col-span-2">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="md:col-span-1">
                     <label className="mb-2 block text-sm font-medium">Keyword</label>
                     <div className="relative">
                       <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -180,52 +168,6 @@ const Lawyers = () => {
                         ))}
                       </SelectContent>
                     </Select>
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium">Minimum Experience</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 3"
-                      value={minExperience}
-                      onChange={(e) => setMinExperience(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium">Minimum Rating</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="5"
-                      step="0.1"
-                      placeholder="e.g. 4.0"
-                      value={minRating}
-                      onChange={(e) => setMinRating(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium">Fee From</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 1000"
-                      value={minPrice}
-                      onChange={(e) => setMinPrice(e.target.value)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium">Fee To</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="e.g. 5000"
-                      value={maxPrice}
-                      onChange={(e) => setMaxPrice(e.target.value)}
-                    />
                   </div>
                 </div>
               </CardContent>
@@ -277,11 +219,25 @@ const Lawyers = () => {
                         <span className="font-semibold">{lawyer.rating}</span>
                         <span className="text-muted-foreground">({lawyer.totalReviews} reviews)</span>
                       </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <IndianRupee className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-semibold">Rs {lawyer.hourlyRate}/hr</span>
+                      <div className="grid grid-cols-2 gap-4 text-sm pt-3 border-t">
+                        <div className="space-y-1">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Consultation</p>
+                          <div className="flex items-baseline gap-1 text-primary">
+                            <span className="font-bold text-base">₹ {lawyer.hourlyRate}</span>
+                            <span className="text-[10px] text-muted-foreground font-normal">/consultation</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1 border-l pl-4">
+                          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Case Fee</p>
+                          <div className="flex items-baseline gap-1 text-primary">
+                            <span className="font-bold text-base">₹ {lawyer.baseCaseFee || 5000}</span>
+                            <span className="text-[10px] text-muted-foreground font-normal">/case</span>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-sm text-muted-foreground">{lawyer.experience} years experience</p>
+                      <p className="text-xs text-muted-foreground pt-3 font-medium">
+                        {lawyer.experience || 0} years of experience
+                      </p>
                     </div>
 
                     <div className="mb-4 flex flex-wrap gap-2">

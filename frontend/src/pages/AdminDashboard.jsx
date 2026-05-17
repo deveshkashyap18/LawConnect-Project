@@ -24,6 +24,7 @@ import {
   updateLawyerVerification,
   updateTransactionStatus,
   updateBookingStatus,
+  deleteUserByAdmin,
 } from "@/lib/dataService";
 
 const formatCurrency = (value) => `INR ${value.toLocaleString("en-IN")}`;
@@ -72,10 +73,21 @@ const AdminDashboard = () => {
 
   const lawyers = useMemo(() => overview?.lawyers || [], [overview?.lawyers]);
   const users = useMemo(() => overview?.users || [], [overview?.users]);
+  const cases = useMemo(() => overview?.cases || [], [overview?.cases]);
   const bookings = useMemo(() => overview?.bookings || [], [overview?.bookings]);
   const transactions = useMemo(
     () => overview?.transactions || [],
     [overview?.transactions],
+  );
+
+  const consultationTransactions = useMemo(
+    () => transactions.filter(t => String(t.caseTitle).startsWith("Consultation on ")),
+    [transactions]
+  );
+
+  const caseTransactions = useMemo(
+    () => transactions.filter(t => !String(t.caseTitle).startsWith("Consultation on ")),
+    [transactions]
   );
 
   const pendingLawyers = useMemo(
@@ -176,6 +188,24 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleDeleteUser = async (userId) => {
+    try {
+      await deleteUserByAdmin(userId);
+      setOverview((prev) =>
+        prev
+          ? {
+              ...prev,
+              users: prev.users.filter((user) => user.id !== userId),
+              bookings: prev.bookings.filter((booking) => booking.clientId !== userId),
+            }
+          : prev,
+      );
+      toast.success("Client removed successfully.");
+    } catch (error) {
+      toast.error(error.message || "Unable to remove client.");
+    }
+  };
+
   const handleDeleteSlot = async (lawyerId, slotId) => {
     try {
       const response = await deleteLawyerSlotByAdmin(lawyerId, slotId);
@@ -258,7 +288,7 @@ const AdminDashboard = () => {
 
           <Tabs defaultValue="users" className="w-full">
             <TabsList>
-              <TabsTrigger value="users">Clients</TabsTrigger>
+              <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="bookings">Bookings</TabsTrigger>
               <TabsTrigger value="verification">Lawyer Verification</TabsTrigger>
               <TabsTrigger value="disputes">Disputes</TabsTrigger>
@@ -266,7 +296,7 @@ const AdminDashboard = () => {
               <TabsTrigger value="analytics">Analytics</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="users" className="mt-6">
+            <TabsContent value="users" className="mt-6 space-y-6">
               <Card>
                 <CardHeader>
                   <CardTitle>All Registered Clients</CardTitle>
@@ -275,13 +305,69 @@ const AdminDashboard = () => {
                   <div className="space-y-3">
                     {users.map((user) => (
                       <div key={user.id} className="flex items-center justify-between gap-4 p-3 border rounded-lg">
-                        <div>
-                          <p className="font-medium">{user.name}</p>
-                          <p className="text-sm text-muted-foreground">{user.email}</p>
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={user.avatar || "/default-avatar.png"}
+                            alt={user.name}
+                            className="w-10 h-10 rounded-full"
+                            onError={(e) => { e.target.src = "https://ui-avatars.com/api/?name=" + user.name }}
+                          />
+                          <div>
+                            <p className="font-medium">{user.name}</p>
+                            <p className="text-sm text-muted-foreground">{user.email}</p>
+                          </div>
                         </div>
-                        <Badge variant="secondary" className="capitalize">
-                          {user.role}
-                        </Badge>
+                        <div className="flex flex-col items-end gap-2">
+                          <Badge variant="secondary" className="capitalize">
+                            {user.role}
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="text-destructive hover:bg-destructive/10"
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>All Registered Lawyers</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {lawyers.map((lawyer) => (
+                      <div key={lawyer.id} className="flex items-center justify-between gap-4 p-3 border rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={lawyer.avatar}
+                            alt={lawyer.name}
+                            className="w-10 h-10 rounded-full"
+                          />
+                          <div>
+                            <p className="font-medium">{lawyer.name}</p>
+                            <p className="text-sm text-muted-foreground">{lawyer.email}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2">
+                          <Badge variant={lawyer.verified ? "default" : "secondary"}>
+                            {lawyer.verified ? "Verified" : "Pending"}
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteLawyer(lawyer.id)}
+                            className="text-destructive hover:bg-destructive/10"
+                          >
+                            Remove
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -289,10 +375,10 @@ const AdminDashboard = () => {
               </Card>
             </TabsContent>
 
-            <TabsContent value="bookings" className="mt-6">
+            <TabsContent value="bookings" className="mt-6 space-y-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>All Bookings</CardTitle>
+                  <CardTitle>Consultation Bookings</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
@@ -326,6 +412,40 @@ const AdminDashboard = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Case Bookings</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {cases.map((caseItem) => {
+                       const client = users.find(u => u.id === caseItem.clientId);
+                       const lawyer = lawyers.find(l => l.id === caseItem.lawyerId);
+                       return (
+                         <div key={caseItem.id} className="border rounded-lg p-4">
+                           <div className="flex items-start justify-between gap-4">
+                             <div>
+                               <p className="font-semibold">{client ? client.name : 'Unknown Client'} with {lawyer ? lawyer.name : 'Unknown Lawyer'}</p>
+                               <p className="text-sm text-muted-foreground mt-1">
+                                 Case: {caseItem.title}
+                               </p>
+                               <p className="text-sm text-muted-foreground mt-1">
+                                 Fee: {formatCurrency(caseItem.finalFee)} | Payment: <span className="font-medium capitalize text-foreground">{caseItem.paymentStatus}</span>
+                               </p>
+                             </div>
+                             <div className="flex flex-col items-end gap-2">
+                               <Badge variant={caseItem.status === "active" ? "default" : caseItem.status === "closed" ? "secondary" : "destructive"} className="capitalize">
+                                 {caseItem.status}
+                               </Badge>
+                             </div>
+                           </div>
+                         </div>
+                       );
+                    })}
                   </div>
                 </CardContent>
               </Card>
@@ -491,35 +611,75 @@ const AdminDashboard = () => {
               </Card>
             </TabsContent>
 
-            <TabsContent value="transactions" className="mt-6">
+            <TabsContent value="transactions" className="mt-6 space-y-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Recent Transactions</CardTitle>
+                  <CardTitle>Consultation Transactions</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {transactions.map((transaction) => (
-                      <div
-                        key={transaction.id}
-                        className="flex items-center justify-between gap-4 p-3 border rounded-lg"
-                      >
-                        <div>
-                          <p className="font-medium">{transaction.caseTitle}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {transaction.clientName} to {transaction.lawyerName}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Method: {transaction.method} {transaction.bookingId ? `| Booking ${transaction.bookingId.slice(-6)}` : ""}
-                          </p>
+                    {consultationTransactions.length === 0 ? (
+                      <p className="text-muted-foreground">No consultation transactions.</p>
+                    ) : (
+                      consultationTransactions.map((transaction) => (
+                        <div
+                          key={transaction.id}
+                          className="flex items-center justify-between gap-4 p-3 border rounded-lg"
+                        >
+                          <div>
+                            <p className="font-medium">{transaction.caseTitle}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {transaction.clientName} to {transaction.lawyerName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Method: {transaction.method} {transaction.bookingId ? `| Booking ${transaction.bookingId.slice(-6)}` : ""}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold">{formatCurrency(transaction.amount)}</p>
+                            <Badge variant="secondary" className="mt-1 capitalize">
+                              {transaction.status}
+                            </Badge>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold">{formatCurrency(transaction.amount)}</p>
-                          <Badge variant="secondary" className="mt-1 capitalize">
-                            {transaction.status}
-                          </Badge>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Case Transactions</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {caseTransactions.length === 0 ? (
+                      <p className="text-muted-foreground">No case transactions.</p>
+                    ) : (
+                      caseTransactions.map((transaction) => (
+                        <div
+                          key={transaction.id}
+                          className="flex items-center justify-between gap-4 p-3 border rounded-lg"
+                        >
+                          <div>
+                            <p className="font-medium">{transaction.caseTitle}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {transaction.clientName} to {transaction.lawyerName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Method: {transaction.method}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold">{formatCurrency(transaction.amount)}</p>
+                            <Badge variant="secondary" className="mt-1 capitalize">
+                              {transaction.status}
+                            </Badge>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>

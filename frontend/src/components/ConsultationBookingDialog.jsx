@@ -71,7 +71,7 @@ export const ConsultationBookingDialog = ({
     } else {
       onConfirm({
         date: selectedDateStr,
-        timeSlot: `${customTime} - ${formatTime12Hour(addMinutesToTime(customTime, 45))}`,
+        timeSlot: `${customTime} - ${formatTime12Hour(addMinutesToTime(customTime, 60))}`,
         notes: bookingNotes,
       });
     }

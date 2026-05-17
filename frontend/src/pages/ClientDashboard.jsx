@@ -18,7 +18,10 @@ import {
   fetchCases,
   fetchMessages,
   uploadDocument,
+  updateCaseStatus,
+  submitReview,
 } from "@/lib/dataService";
+import { createRazorpayOrder, verifyRazorpayPayment } from "@/lib/paymentService";
 import { LawyerSuggestions } from "@/components/LawyerSuggestions";
 import { CaseUpdateDialog } from "@/components/CaseUpdateDialog";
 import { TimelineEventEditDialog } from "@/components/TimelineEventEditDialog";
@@ -33,6 +36,10 @@ import {
   MessageSquare,
   Upload,
   X,
+  CheckCircle,
+  Star,
+  CalendarDays,
+  MapPin,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -51,6 +58,8 @@ const ClientDashboard = () => {
   const [date, setDate] = useState(new Date());
   const [isLoading, setIsLoading] = useState(true);
   const [uploadingCaseId, setUploadingCaseId] = useState(null);
+  const [reviewData, setReviewData] = useState({}); // { [caseId]: { rating, comment } }
+  const [submittingReview, setSubmittingReview] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -87,13 +96,25 @@ const ClientDashboard = () => {
     socket.emit("join", currentUser.id);
 
     const handleCaseUpdate = (updatedCase) => {
-      setCases((prev) => prev.map((c) => (c.id === updatedCase.id ? updatedCase : c)));
+      setCases((prev) => {
+        const exists = prev.some((c) => c.id === updatedCase.id);
+        if (exists) {
+          return prev.map((c) => (c.id === updatedCase.id ? updatedCase : c));
+        }
+        return [updatedCase, ...prev];
+      });
     };
     socket.on("case_update", handleCaseUpdate);
     socket.on("timeline_update", handleCaseUpdate);
 
     const handleBookingUpdate = (updatedBooking) => {
-      setBookings((prev) => prev.map((b) => (b.id === updatedBooking.id ? updatedBooking : b)));
+      setBookings((prev) => {
+        const exists = prev.some((b) => b.id === updatedBooking.id);
+        if (exists) {
+          return prev.map((b) => (b.id === updatedBooking.id ? updatedBooking : b));
+        }
+        return [updatedBooking, ...prev];
+      });
     };
     socket.on("booking_updated", handleBookingUpdate);
 
@@ -118,7 +139,20 @@ const ClientDashboard = () => {
   const stats = useMemo(() => ({
     activeCases: cases.filter((c) => c.status === "active").length,
     documents: cases.reduce((n, c) => n + (c.documents?.length ?? 0), 0),
-    hearings: cases.reduce((n, c) => n + (c.hearingDates?.length ?? 0), 0),
+    hearings: cases.reduce((n, c) => {
+      const upcoming = (c.hearingDates || []).filter(h => {
+        if (h.status === "completed") return false;
+        if (!h.date) return false;
+        
+        // Use local date comparison
+        const now = new Date();
+        now.setHours(0,0,0,0);
+        const [y, m, d] = h.date.split("-");
+        const dt = new Date(y, m - 1, d);
+        return dt >= now;
+      });
+      return n + upcoming.length;
+    }, 0),
     bookings: bookings.filter((b) => b.status !== "cancelled").length,
     unreadMessages: messages.filter(
       (m) => m.receiverId === currentUser?.id && !m.read
@@ -231,6 +265,113 @@ const ClientDashboard = () => {
     }
   };
 
+  // ── Pay Case Fee (Razorpay) ────────────────────────────────────────────────
+  const handlePayCaseFee = async (caseItem) => {
+    try {
+      const res = await (async () => {
+        const scriptLoaded = await new Promise((resolve) => {
+          const script = document.createElement("script");
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.onload = () => resolve(true);
+          script.onerror = () => resolve(false);
+          document.body.appendChild(script);
+        });
+
+        if (!scriptLoaded) {
+          toast.error("Razorpay SDK failed to load. Check your internet connection.");
+          return;
+        }
+
+        const orderData = await createRazorpayOrder({
+          amount: caseItem.finalFee,
+          caseId: caseItem.id
+        });
+
+        const options = {
+          key: orderData.keyId,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          name: "LawConnect",
+          description: `Case Final Fee - ${caseItem.title}`,
+          order_id: orderData.orderId,
+          handler: async (response) => {
+            try {
+              const result = await verifyRazorpayPayment({
+                ...response,
+                caseId: caseItem.id
+              });
+              setCases((prev) => prev.map((c) => (c.id === caseItem.id ? result.caseItem : c)));
+              toast.success("Payment successful! Case fee settled.");
+            } catch (err) {
+              toast.error(err.message || "Payment verification failed.");
+            }
+          },
+          prefill: {
+            name: currentUser.name,
+            email: currentUser.email,
+            contact: currentUser.phone || "",
+          },
+          theme: {
+            color: "#0f172a",
+          },
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+      })();
+    } catch (error) {
+      console.error("Payment failed:", error);
+      toast.error(error.message || "Payment initialization failed.");
+    }
+  };
+
+  const handleCompleteCase = async (caseId) => {
+    if (!confirm("Are you sure you want to mark this case as completed? This will finalize the status and initiate the final fee payment.")) {
+      return;
+    }
+    try {
+      const updatedCase = await updateCaseStatus(caseId, "closed");
+      setCases((prev) => prev.map((c) => (c.id === caseId ? updatedCase : c)));
+      toast.success("Case marked as completed!");
+    } catch (error) {
+      toast.error(error.message || "Failed to complete case.");
+    }
+  };
+
+  const handleReviewSubmit = async (caseItem) => {
+    const data = reviewData[caseItem.id] || { rating: 5, comment: "" };
+    if (!data.comment.trim()) {
+      toast.error("Please enter a comment.");
+      return;
+    }
+    try {
+      setSubmittingReview(true);
+      await submitReview({
+        lawyerId: caseItem.lawyerId,
+        rating: data.rating,
+        comment: data.comment,
+        caseId: caseItem.id
+      });
+      toast.success("Review submitted successfully!");
+      // Clear only this case's review data
+      setReviewData(prev => ({ ...prev, [caseItem.id]: undefined }));
+    } catch (error) {
+      toast.error(error.message || "Failed to submit review.");
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
+  const updateReviewState = (caseId, field, value) => {
+    setReviewData(prev => ({
+      ...prev,
+      [caseId]: {
+        ...(prev[caseId] || { rating: 5, comment: "" }),
+        [field]: value
+      }
+    }));
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -246,14 +387,25 @@ const ClientDashboard = () => {
         }}
       />
       <div className="flex-1">
-        <div className="gradient-hero py-8">
+        <div className="gradient-primary py-8">
           <div className="container mx-auto px-4">
-            <h1 className="text-3xl font-bold">
-              Welcome back, {currentUser?.name || "Client"}!
-            </h1>
-            <p className="text-muted-foreground">
-              Manage your cases, documents, hearings, and conversations in one place.
-            </p>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h1 className="text-3xl font-bold text-white">
+                  Welcome back, {currentUser?.name || "Client"}!
+                </h1>
+                <p className="text-white/80 mt-2">
+                  Manage your cases, documents, hearings, and conversations in one place.
+                </p>
+              </div>
+              <Badge className={
+                currentUser?.membershipTier === "plus"
+                  ? "bg-yellow-500 text-slate-900 hover:bg-yellow-500 font-extrabold text-lg px-5 py-2.5 rounded-full border-none shadow-lg shadow-yellow-500/20"
+                  : "bg-slate-700 text-slate-200 hover:bg-slate-700 font-semibold text-lg px-5 py-2.5 rounded-full border-none shadow-md"
+              }>
+                {currentUser?.membershipTier === "plus" ? "Client Plus" : "Free Membership"}
+              </Badge>
+            </div>
           </div>
         </div>
 
@@ -422,32 +574,100 @@ const ClientDashboard = () => {
                         </div>
                       )}
 
-                      {/* Timeline */}
+                      {/* Next Hearing Section - Concise Bar */}
+                      {(() => {
+                        const hearings = (caseItem.hearingDates || []).filter(h => h.date);
+                        if (hearings.length === 0) return null;
+
+                        const now = new Date();
+                        now.setHours(0,0,0,0);
+
+                        const parseFlexDate = (str) => {
+                          if (!str) return null;
+                          // Try YYYY-MM-DD
+                          if (str.includes("-")) {
+                            const [y, m, d] = str.split("-");
+                            if (y.length === 4) return new Date(y, m - 1, d);
+                            if (d?.length === 4) return new Date(d, m - 1, y); // DD-MM-YYYY
+                          }
+                          const d = new Date(str);
+                          return isNaN(d.getTime()) ? null : d;
+                        };
+
+                        const nextHearing = (caseItem.hearingDates || [])
+                          .map(h => ({ ...h, dt: parseFlexDate(h.date) }))
+                          .filter(h => h.dt)
+                          .filter(h => {
+                            const hd = new Date(h.dt);
+                            hd.setHours(0,0,0,0);
+                            return hd >= now && h.status !== "completed";
+                          })
+                          .sort((a,b) => a.dt - b.dt)[0];
+                        
+                        if (!nextHearing) return null;
+
+                        const daysLeft = Math.ceil((new Date(nextHearing.dt).setHours(0,0,0,0) - now.getTime()) / (1000 * 60 * 60 * 24));
+
+                        return (
+                          <div className="mb-6 p-3 bg-primary/10 rounded-lg border border-primary/20 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="p-1.5 bg-primary rounded-md">
+                                <CalendarDays className="h-4 w-4 text-white" />
+                              </div>
+                              <div className="flex items-center flex-wrap gap-x-2">
+                                <span className="text-sm font-bold text-primary uppercase">Next Hearing:</span>
+                                <span className="text-sm font-semibold">
+                                  {nextHearing.dt.toLocaleDateString("en-IN", { day: 'numeric', month: 'short', year: 'numeric' })}
+                                </span>
+                                <span className="text-muted-foreground">|</span>
+                                <span className="text-sm font-medium text-muted-foreground">{nextHearing.title} @ {nextHearing.location}</span>
+                              </div>
+                            </div>
+                            <Badge className={`border-none text-[10px] py-0 h-5 ${daysLeft === 0 ? 'bg-orange-500 text-white' : 'bg-primary/20 text-primary'}`}>
+                              {daysLeft === 0 ? "TODAY" : `In ${daysLeft} Days`}
+                            </Badge>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Case Timeline */}
                       {caseItem.timeline?.length > 0 && (
                         <div className="border-t pt-4 mb-4">
                           <h4 className="font-semibold mb-3">Case Timeline</h4>
                           <div className="space-y-3">
-                            {caseItem.timeline.map((event) => (
-                              <div key={event.id} className="flex gap-3 group">
-                                <div className="flex flex-col items-center">
-                                  <div className="w-2 h-2 rounded-full bg-primary" />
-                                  <div className="w-px h-full bg-border" />
-                                </div>
-                                <div className="flex-1 pb-3">
-                                  <div className="flex items-start justify-between">
-                                    <p className="text-lg font-bold">{event.title}</p>
-                                    {event.addedByRole === "client" && (
-                                      <TimelineEventEditDialog
-                                        event={event}
-                                        onUpdate={(eventId, update) => handleTimelineUpdate(caseItem.id, eventId, update)}
-                                      />
-                                    )}
+                            {caseItem.timeline.map((event) => {
+                                // Default texts for Client
+                                let displayTitle = event.title;
+                                let displayDesc = event.description;
+                                
+                                // Specific tweaks for Client view
+                                if (event.title === "Consultation Request Sent") {
+                                  displayTitle = "Case Request Sent Successfully";
+                                  displayDesc = "Your case request has been sent to the lawyer. Waiting for their confirmation.";
+                                }
+
+                                return (
+                                  <div key={event.id} className="flex gap-3 group">
+                                    <div className="flex flex-col items-center">
+                                      <div className="w-2 h-2 rounded-full bg-primary" />
+                                      <div className="w-px h-full bg-border" />
+                                    </div>
+                                    <div className="flex-1 pb-3">
+                                      <div className="flex items-start justify-between">
+                                        <p className="text-lg font-bold">{displayTitle}</p>
+                                        {event.addedByRole === "client" && (
+                                          <TimelineEventEditDialog
+                                            event={event}
+                                            onUpdate={(eventId, update) => handleTimelineUpdate(caseItem.id, eventId, update)}
+                                          />
+                                        )}
+                                      </div>
+                                      <p className="text-base text-muted-foreground mt-1 leading-relaxed">{displayDesc}</p>
+                                      <p className="text-sm text-muted-foreground/60 mt-1">{event.date}</p>
+                                    </div>
                                   </div>
-                                  <p className="text-base text-muted-foreground mt-1 leading-relaxed">{event.description}</p>
-                                  <p className="text-sm text-muted-foreground/60 mt-1">{event.date}</p>
-                                </div>
-                              </div>
-                            ))}
+                                );
+                              })}
                           </div>
                         </div>
                       )}
@@ -468,21 +688,89 @@ const ClientDashboard = () => {
                           disabled={caseItem.status !== "active"}
                           onUpdate={handleCaseUpdate}
                         />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={uploadingCaseId === caseItem.id || caseItem.status !== "active"}
-                          onClick={() => {
-                            setUploadingCaseId(caseItem.id);
-                            fileInputRef.current?.click();
-                          }}
-                        >
-                          <Upload className="h-4 w-4 mr-2" />
-                          {uploadingCaseId === caseItem.id ? "Uploading…" : "Upload Doc"}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={uploadingCaseId === caseItem.id || caseItem.status !== "active"}
+                            onClick={() => {
+                              setUploadingCaseId(caseItem.id);
+                              fileInputRef.current?.click();
+                            }}
+                          >
+                            <Upload className="h-4 w-4 mr-2" />
+                            {uploadingCaseId === caseItem.id ? "Uploading…" : "Upload Doc"}
+                          </Button>
+                          {caseItem.status === "active" && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={() => handleCompleteCase(caseItem.id)}
+                            >
+                              <CheckCircle className="h-4 w-4 mr-2" />
+                              Complete Case
+                            </Button>
+                          )}
+                        </div>
+                        {caseItem.status === "closed" && caseItem.paymentStatus === "unpaid" && (
+                          <div className="mt-4 p-4 bg-primary/5 rounded-lg border border-primary/20 flex items-center justify-between">
+                            <div>
+                              <p className="font-semibold">Case Completed</p>
+                              <p className="text-sm text-muted-foreground">Final Fee: INR {caseItem.finalFee}</p>
+                            </div>
+                            <Button onClick={() => handlePayCaseFee(caseItem)}>
+                              Pay Final Fee
+                            </Button>
+                          </div>
+                        )}
+                        {caseItem.status === "closed" && caseItem.paymentStatus === "paid" && (
+                          <div className="mt-4 p-4 bg-green-500/5 rounded-lg border border-green-500/20 flex items-center justify-between">
+                            <div>
+                              <p className="font-semibold text-green-600">Case Completed & Paid</p>
+                              <p className="text-sm text-muted-foreground">The final fee has been settled.</p>
+                            </div>
+                            <Badge className="bg-green-600">Paid</Badge>
+                          </div>
+                        )}
+                        {caseItem.status === "closed" && caseItem.paymentStatus === "paid" && (
+                          <div className="mt-4 p-4 bg-muted/50 rounded-lg border border-dashed">
+                            <h4 className="text-sm font-semibold mb-3">Rate your experience with the lawyer</h4>
+                            <div className="flex gap-2 mb-3">
+                              {[1, 2, 3, 4, 5].map((star) => (
+                                <button
+                                  key={star}
+                                  onClick={() => updateReviewState(caseItem.id, "rating", star)}
+                                  className="focus:outline-none"
+                                >
+                                  <Star
+                                    className={`h-6 w-6 ${
+                                      star <= (reviewData[caseItem.id]?.rating || 5)
+                                        ? "fill-amber-400 text-amber-400"
+                                        : "text-muted-foreground"
+                                    }`}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                            <textarea
+                              className="w-full p-3 text-sm border rounded-md bg-background focus:ring-1 focus:ring-primary outline-none"
+                              placeholder="Write your review here..."
+                              rows={3}
+                              value={reviewData[caseItem.id]?.comment || ""}
+                              onChange={(e) => updateReviewState(caseItem.id, "comment", e.target.value)}
+                            />
+                            <Button
+                              className="mt-3 w-full"
+                              size="sm"
+                              disabled={submittingReview}
+                              onClick={() => handleReviewSubmit(caseItem)}
+                            >
+                              {submittingReview ? "Submitting..." : "Submit Review"}
+                            </Button>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
                 ))
               )}
             </TabsContent>

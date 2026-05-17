@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { Toaster } from "@/components/ui/toaster";
+
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,8 +34,7 @@ const App = () => {
       <AuthProvider>
         <ThemeProvider defaultTheme="light" storageKey="lawconnect-theme">
           <TooltipProvider>
-            <Toaster />
-            <Sonner />
+            <Sonner position="bottom-right" richColors />
 
             <BrowserRouter>
               <Suspense fallback={<AppLoader />}>

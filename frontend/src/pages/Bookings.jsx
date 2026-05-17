@@ -4,12 +4,13 @@ import { Footer } from "@/components/Footer";
 import { useAuth } from "@/context/AuthContext";
 import { socket } from "@/lib/socketClient";
 import { fetchBookings, cancelBooking, updateBookingStatus, createCaseRequest, payForBooking } from "@/lib/dataService";
+import { loadRazorpayScript, createRazorpayOrder, verifyRazorpayPayment } from "@/lib/paymentService";
 import { CaseBookingDialog } from "@/components/CaseBookingDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Calendar, Clock, DollarSign, Briefcase, CreditCard } from "lucide-react";
+import { Calendar, Clock, IndianRupee, Briefcase, CreditCard, CheckCircle } from "lucide-react";
 import { ReviewModal } from "@/components/ReviewModal";
 
 export default function Bookings() {
@@ -104,16 +105,67 @@ export default function Bookings() {
     }
   };
 
-  const handlePayNow = async (bookingId, method) => {
+  const handlePayNow = async (booking) => {
     try {
-      setPayingBookingId(bookingId);
-      const updatedBooking = await payForBooking(bookingId, method);
-      setBookings((prev) =>
-        prev.map((booking) => (booking.id === bookingId ? updatedBooking : booking)),
-      );
-      toast.success("Payment completed successfully.");
+      setPayingBookingId(booking.id);
+      
+      // 1. Load Razorpay Script
+      const isLoaded = await loadRazorpayScript();
+      if (!isLoaded) {
+        toast.error("Razorpay SDK failed to load. Please check your internet.");
+        return;
+      }
+
+      // 2. Create Order on Backend
+      const orderData = await createRazorpayOrder({
+        amount: booking.amount,
+        bookingId: booking.id
+      });
+
+      // 3. Open Razorpay Checkout
+      const options = {
+        key: orderData.keyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: "LawConnect",
+        description: `Payment for consultation with ${booking.lawyerName}`,
+        order_id: orderData.orderId,
+        handler: async (response) => {
+          try {
+            // 4. Verify Payment
+            await verifyRazorpayPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              bookingId: booking.id
+            });
+
+            toast.success("Payment successful! Your case has been started.");
+            loadBookings(); // Refresh list
+          } catch (err) {
+            toast.error(err.message || "Verification failed.");
+          }
+        },
+        prefill: {
+          name: currentUser.name,
+          email: currentUser.email,
+          contact: currentUser.phone || "",
+        },
+        theme: {
+          color: "#0f172a",
+        },
+        modal: {
+          ondismiss: () => {
+            setPayingBookingId("");
+          }
+        }
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+
     } catch (error) {
-      toast.error(error.message || "Unable to complete payment.");
+      toast.error(error.message || "Failed to initiate payment.");
     } finally {
       setPayingBookingId("");
     }
@@ -122,6 +174,13 @@ export default function Bookings() {
   const handleBookForCase = (booking) => {
     if (currentUser?.role !== "client") {
       toast.error("Only clients can book a lawyer for a case.");
+      return;
+    }
+    if (currentUser?.membershipTier !== "plus") {
+      toast.error("To register or add a case, you must purchase the Client Plus plan. Redirecting to Pricing...");
+      setTimeout(() => {
+        window.location.href = "/pricing";
+      }, 1500);
       return;
     }
     setSelectedBooking(booking);
@@ -192,8 +251,8 @@ export default function Bookings() {
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Clock className="h-4 w-4" /> <span>{booking.timeSlot}</span>
                   </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <DollarSign className="h-4 w-4" /> <span>INR {booking.amount}</span>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground font-semibold">
+                    <IndianRupee className="h-4 w-4 text-primary" /> <span>{booking.amount}</span>
                   </div>
                   <div className="text-sm">
                     <span className="text-muted-foreground">Payment:</span>{" "}
@@ -209,35 +268,19 @@ export default function Bookings() {
                   {currentUser.role === "client" && ["pending", "approved"].includes(booking.status) && (
                     <div className="space-y-2">
                       {booking.paymentStatus !== "paid" ? (
-                        <div className="grid grid-cols-3 gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={payingBookingId === booking.id}
-                            onClick={() => handlePayNow(booking.id, "upi")}
-                          >
-                            {payingBookingId === booking.id ? "..." : "UPI"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={payingBookingId === booking.id}
-                            onClick={() => handlePayNow(booking.id, "card")}
-                          >
-                            <CreditCard className="h-4 w-4 mr-1" />
-                            Card
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={payingBookingId === booking.id}
-                            onClick={() => handlePayNow(booking.id, "netbanking")}
-                          >
-                            Bank
-                          </Button>
-                        </div>
+                        <Button
+                          className="w-full gap-2 bg-green-600 hover:bg-green-700 text-white"
+                          disabled={payingBookingId === booking.id}
+                          onClick={() => handlePayNow(booking)}
+                        >
+                          <CreditCard className="h-4 w-4" />
+                          {payingBookingId === booking.id ? "Processing..." : "Pay Now"}
+                        </Button>
                       ) : (
-                        <div className="text-sm text-success">Payment completed for this consultation.</div>
+                        <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-2 rounded border border-green-200">
+                          <CheckCircle className="h-4 w-4" />
+                          <span>Payment Completed</span>
+                        </div>
                       )}
                       <Button
                         variant="destructive"
@@ -273,6 +316,7 @@ export default function Bookings() {
                       <ReviewModal
                         lawyerId={booking.lawyerId}
                         lawyerName={booking.lawyerName}
+                        bookingId={booking.id}
                         onReviewSubmitted={() => loadBookings()}
                       />
                     </div>
@@ -293,7 +337,7 @@ export default function Bookings() {
                     </div>
                   )}
 
-                  {currentUser.role === "lawyer" && booking.status === "approved" && (
+                  {currentUser.role === "lawyer" && ["approved", "paid"].includes(booking.status) && (
                     <Button
                       size="sm"
                       className="w-full mt-4"

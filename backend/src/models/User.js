@@ -14,6 +14,11 @@ const userSchema = new mongoose.Schema(
     avatar: { type: String, default: "" },
     phone: { type: String, default: "" },
     location: { type: String, default: "" },
+    membershipTier: {
+      type: String,
+      enum: ["basic", "plus", ""],
+      default: "",
+    },
   },
   { timestamps: true },
 );

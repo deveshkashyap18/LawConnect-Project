@@ -67,11 +67,20 @@ const createCaseRequest = async (payload) => {
   return response.caseItem;
 };
 
-const updateCaseStatus = async (id, status) => {
+const updateCaseStatus = async (id, status, extra = {}) => {
   const response = await apiRequest(`/cases/${id}/status`, {
     method: "PATCH",
     auth: true,
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, ...extra }),
+  });
+  return response.caseItem;
+};
+
+const payCaseFee = async (id, method = "UPI") => {
+  const response = await apiRequest(`/cases/${id}/pay`, {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ method }),
   });
   return response.caseItem;
 };
@@ -81,6 +90,24 @@ const addCaseTimelineEvent = async (id, payload) => {
     method: "POST",
     auth: true,
     body: JSON.stringify(payload),
+  });
+  return response.caseItem;
+};
+
+const addCaseHearing = async (caseId, payload) => {
+  const response = await apiRequest(`/cases/${caseId}/hearings`, {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+  return response.caseItem;
+};
+
+const updateHearingStatus = async (caseId, hearingId, status) => {
+  const response = await apiRequest(`/cases/${caseId}/hearings/${hearingId}`, {
+    method: "PATCH",
+    auth: true,
+    body: JSON.stringify({ status }),
   });
   return response.caseItem;
 };
@@ -216,10 +243,33 @@ const deleteLawyerByAdmin = async (id) => {
   });
 };
 
+const deleteUserByAdmin = async (id) => {
+  return await apiRequest(`/admin/users/${id}`, {
+    method: "DELETE",
+    auth: true,
+  });
+};
+
 const deleteLawyerSlotByAdmin = async (lawyerId, slotId) => {
   return await apiRequest(`/admin/lawyers/${lawyerId}/slots/${slotId}`, {
     method: "DELETE",
     auth: true,
+  });
+};
+
+const updateLawyerProfile = async (payload) => {
+  return await apiRequest("/lawyers/me", {
+    method: "PATCH",
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+};
+
+const updateCaseFee = async (caseId, finalFee) => {
+  return await apiRequest(`/cases/${caseId}/fee`, {
+    method: "PATCH",
+    auth: true,
+    body: JSON.stringify({ finalFee }),
   });
 };
 
@@ -229,6 +279,8 @@ export {
   createCaseRequest,
   updateCaseStatus,
   addCaseTimelineEvent,
+  addCaseHearing,
+  updateHearingStatus,
   updateCaseTimelineEvent,
   fetchAdminOverview,
   fetchCases,
@@ -252,5 +304,33 @@ export {
   updateLawyerSlot,
   deleteLawyerSlot,
   deleteLawyerByAdmin,
+  deleteUserByAdmin,
   deleteLawyerSlotByAdmin,
+  payCaseFee,
+  updateLawyerProfile,
+  updateCaseFee,
+};
+
+export const createSubscriptionOrder = async (plan) => {
+  return await apiRequest("/payments/subscription/order", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ plan }),
+  });
+};
+
+export const verifySubscriptionPayment = async (payload) => {
+  return await apiRequest("/payments/subscription/verify", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+};
+
+export const updateMembershipTier = async (tier) => {
+  return await apiRequest("/membership", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({ tier }),
+  });
 };

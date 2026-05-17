@@ -6,6 +6,7 @@ const hearingSchema = new mongoose.Schema(
     title: { type: String, required: true },
     location: { type: String, required: true },
     notes: { type: String, default: "" },
+    status: { type: String, enum: ["pending", "completed"], default: "pending" },
   },
   { timestamps: false },
 );
@@ -43,6 +44,12 @@ const caseSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "active", "closed", "rejected"],
       default: "pending",
+    },
+    finalFee: { type: Number, default: 0 },
+    paymentStatus: {
+      type: String,
+      enum: ["unpaid", "paid"],
+      default: "unpaid",
     },
     hearingDates: { type: [hearingSchema], default: [] },
     documents: { type: [documentSchema], default: [] },

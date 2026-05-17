@@ -1,7 +1,7 @@
 /**
  * Generate default consultation slots
  * Time: 10 AM to 4 PM
- * Duration: 45 minutes per slot
+ * Duration: 60 minutes per slot
  * @param {string} date - Date in format "YYYY-MM-DD"
  * @returns {array} Array of slots { startTime, endTime }
  */
@@ -9,7 +9,7 @@ export const generateDefaultSlots = (date) => {
   const slots = [];
   const startHour = 10; // 10 AM
   const endHour = 16; // 4 PM
-  const slotDuration = 45; // minutes
+  const slotDuration = 60; // minutes
 
   for (let currentMinutes = startHour * 60; currentMinutes + slotDuration <= endHour * 60; currentMinutes += slotDuration) {
     const startHourValue = Math.floor(currentMinutes / 60);

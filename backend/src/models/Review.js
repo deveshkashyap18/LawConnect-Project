@@ -8,6 +8,8 @@ const reviewSchema = new mongoose.Schema(
     rating: { type: Number, required: true },
     comment: { type: String, required: true },
     date: { type: String, required: true },
+    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking" },
+    caseId: { type: mongoose.Schema.Types.ObjectId, ref: "Case" },
   },
   { timestamps: true },
 );

@@ -40,7 +40,7 @@ const emitLawyerSlotsUpdated = (lawyer) => {
         date: slot.date || "",
         startTime: slot.startTime,
         endTime: slot.endTime,
-        duration: slot.duration || 45,
+        duration: slot.duration || 60,
         status: slot.status || (slot.isBooked ? "booked" : "available"),
         isBooked: Boolean(slot.isBooked || slot.status === "booked"),
       })),
@@ -204,6 +204,24 @@ const createBooking = async (req, res) => {
     return res.status(400).json({ message: "Past consultation dates cannot be booked." });
   }
 
+  if (req.user.role === "client") {
+    if (!req.user.membershipTier || (req.user.membershipTier !== "basic" && req.user.membershipTier !== "plus")) {
+      return res.status(403).json({ message: "Please choose a membership plan before booking a consultation." });
+    }
+
+    if (req.user.membershipTier === "basic") {
+      const existingBookingsCount = await Booking.countDocuments({ 
+        clientId: req.user._id, 
+        status: { $ne: "cancelled" } 
+      });
+      if (existingBookingsCount >= 1) {
+        return res.status(403).json({ 
+          message: "Under the free Basic Plan, you can only book exactly 1 consultation. Please upgrade to Client Plus for unlimited bookings." 
+        });
+      }
+    }
+  }
+
   const conflict = await Booking.findOne({
     lawyerId,
     date: bookingDate,
@@ -341,93 +359,120 @@ const getBookings = async (req, res) => {
 };
 
 const updateBookingStatus = async (req, res) => {
-  const { status } = req.body;
-  const allowed = ["pending", "approved", "cancelled", "completed"];
+  try {
+    const { status } = req.body;
+    const allowed = ["pending", "approved", "cancelled", "completed", "paid"];
 
-  if (!allowed.includes(status)) {
-    return res.status(400).json({ message: "Invalid status." });
-  }
+    console.log(`[BOOKING] Attempting status update to: ${status} for ID: ${req.params.id}`);
 
-  const booking = await Booking.findById(req.params.id);
-  if (!booking) {
-    return res.status(404).json({ message: "Booking not found." });
-  }
-
-  if (req.user.role === "lawyer") {
-    if (req.user._id.toString() !== booking.lawyerId.toString()) {
-      return res.status(403).json({ message: "You can only manage your own bookings." });
+    if (!req.params.id || req.params.id === "undefined") {
+      return res.status(400).json({ message: "Invalid booking ID." });
     }
 
-    if (!req.user.verified) {
-      return res.status(403).json({ message: "Your lawyer account is pending verification." });
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: "Invalid status." });
     }
-  }
 
-  const transitionMap = {
-    pending: ["approved", "cancelled"],
-    approved: ["completed", "cancelled"],
-    completed: [],
-    cancelled: [],
-  };
-
-  if (booking.status !== status && !transitionMap[booking.status]?.includes(status)) {
-    return res.status(400).json({ message: "Invalid status transition." });
-  }
-
-  if (status === "completed" && booking.paymentStatus !== "paid") {
-    return res.status(400).json({ message: "Only paid consultations can be marked as completed." });
-  }
-
-  booking.status = status;
-  await booking.save();
-
-  if (status === "cancelled") {
-    await releaseBookedSlot(booking);
-    if (booking.paymentStatus === "paid") {
-      booking.paymentStatus = "refunded";
-      await booking.save();
-      await syncTransactionWithBooking({ booking, status: "refunded", method: "refund" });
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found." });
     }
-  }
 
-  const dto = toBookingDto(booking.toObject());
+    console.log(`[BOOKING] Current status: ${booking.status}, Target status: ${status}`);
 
-  const notifMap = {
-    approved: {
-      type: "booking_approved",
-      title: "Booking Approved!",
-      body: `Your consultation on ${booking.date} at ${booking.timeSlot} has been approved.`,
-    },
-    cancelled: {
-      type: "booking_cancelled",
-      title: "Booking Cancelled",
-      body: `Your consultation on ${booking.date} at ${booking.timeSlot} was cancelled.`,
-    },
-    completed: {
-      type: "booking_completed",
-      title: "Consultation Completed",
-      body: `Your consultation with ${booking.lawyerName} is now marked as completed.`,
-    },
-  };
+    if (req.user.role === "lawyer") {
+      if (req.user._id.toString() !== booking.lawyerId.toString()) {
+        return res.status(403).json({ message: "You can only manage your own bookings." });
+      }
 
-  if (notifMap[status]) {
-    await createNotification({
-      userId: booking.clientId,
-      ...notifMap[status],
-      link: "/client/dashboard",
-    });
-  }
-
-  if (booking.slotId) {
-    const lawyer = await Lawyer.findById(booking.lawyerId);
-    if (lawyer) {
-      emitLawyerSlotsUpdated(lawyer);
+      if (status === "approved" && booking.status !== "approved") {
+        if (req.user.membershipTier === "basic") {
+          const approvedCount = await Booking.countDocuments({
+            lawyerId: req.user._id,
+            status: { $in: ["approved", "completed", "paid"] },
+          });
+          if (approvedCount >= 1) {
+            return res.status(403).json({ 
+              message: "Under the free Basic Plan, you can only approve exactly 1 consultation. Please upgrade to Premium." 
+            });
+          }
+        }
+      }
     }
+
+    const transitionMap = {
+      pending: ["approved", "cancelled", "paid"],
+      approved: ["completed", "cancelled", "paid"],
+      paid: ["completed", "cancelled"],
+      completed: [],
+      cancelled: [],
+    };
+
+    const currentStatus = booking.status || "pending";
+    if (currentStatus !== status && !transitionMap[currentStatus]?.includes(status)) {
+      console.error(`[BOOKING] Blocked invalid transition: ${currentStatus} -> ${status}`);
+      return res.status(400).json({ message: `Cannot change status from ${currentStatus} to ${status}` });
+    }
+
+    if (status === "completed" && booking.amount > 0 && booking.paymentStatus !== "paid") {
+      return res.status(400).json({ message: "Only paid consultations can be marked as completed." });
+    }
+
+    booking.status = status;
+    console.log(`[BOOKING] Saving new status: ${status}`);
+    await booking.save();
+
+    if (status === "cancelled") {
+      await releaseBookedSlot(booking);
+      if (booking.paymentStatus === "paid") {
+        booking.paymentStatus = "refunded";
+        await booking.save();
+        await syncTransactionWithBooking({ booking, status: "refunded", method: "refund" });
+      }
+    }
+
+    const dto = toBookingDto(booking.toObject());
+
+    const notifMap = {
+      approved: {
+        type: "booking_approved",
+        title: "Booking Approved!",
+        body: `Your consultation on ${booking.date} at ${booking.timeSlot} has been approved.`,
+      },
+      cancelled: {
+        type: "booking_cancelled",
+        title: "Booking Cancelled",
+        body: `Your consultation on ${booking.date} at ${booking.timeSlot} was cancelled.`,
+      },
+      completed: {
+        type: "booking_completed",
+        title: "Consultation Completed",
+        body: `Your consultation with ${booking.lawyerName} is now marked as completed.`,
+      },
+    };
+
+    if (notifMap[status]) {
+      await createNotification({
+        userId: booking.clientId,
+        ...notifMap[status],
+        link: "/client/dashboard",
+      });
+    }
+
+    if (booking.slotId) {
+      const lawyer = await Lawyer.findById(booking.lawyerId);
+      if (lawyer) {
+        emitLawyerSlotsUpdated(lawyer);
+      }
+    }
+
+    emitBookingUpdated(booking);
+
+    return res.status(200).json({ booking: dto });
+  } catch (error) {
+    console.error("[BOOKING ERROR]", error);
+    return res.status(500).json({ message: "Internal server error during status update." });
   }
-
-  emitBookingUpdated(booking);
-
-  return res.status(200).json({ booking: dto });
 };
 
 const cancelBooking = async (req, res) => {

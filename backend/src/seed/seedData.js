@@ -73,7 +73,7 @@ const ensureSeedData = async () => {
       passwordHash: lawyerHash,
       name: "Sarah Johnson",
       role: "lawyer",
-      membershipTier: "professional",
+      membershipTier: "premium",
       specialization: ["Criminal Law", "Family Law"],
       experience: 8,
       hourlyRate: 3500,
