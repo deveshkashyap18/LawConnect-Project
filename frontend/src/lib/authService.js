@@ -70,6 +70,13 @@ const listDemoCredentials = async () => {
   }
 };
 
+const sendVerificationOtp = async (email) => {
+  return await apiRequest("/auth/send-otp", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+};
+
 export {
   getSessionUser,
   registerUser,
@@ -77,4 +84,5 @@ export {
   logoutUser,
   updateUser,
   listDemoCredentials,
+  sendVerificationOtp,
 };

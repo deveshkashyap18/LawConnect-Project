@@ -148,20 +148,33 @@ const toMessageDto = (message) => ({
   read: message.read,
 });
 
-const toTransactionDto = (transaction) => ({
-  id: transaction._id.toString(),
-  bookingId: transaction.bookingId?.toString() || "",
-  clientId: transaction.clientId?.toString(),
-  clientName: transaction.clientName,
-  lawyerId: transaction.lawyerId?.toString(),
-  lawyerName: transaction.lawyerName,
-  caseTitle: transaction.caseTitle,
-  amount: transaction.amount,
-  currency: transaction.currency,
-  status: transaction.status,
-  paidAt: transaction.paidAt,
-  method: transaction.method,
-});
+const toTransactionDto = (transaction) => {
+  const isSubscription = String(transaction.caseTitle).includes("Membership Subscription");
+  const commission = transaction.commissionAmount !== undefined && transaction.commissionAmount !== null && transaction.commissionAmount > 0
+    ? transaction.commissionAmount
+    : (isSubscription ? 0 : Number((transaction.amount * 0.02).toFixed(2)));
+  
+  const net = transaction.netAmount !== undefined && transaction.netAmount !== null && transaction.netAmount > 0
+    ? transaction.netAmount
+    : (isSubscription ? transaction.amount : Number((transaction.amount * 0.98).toFixed(2)));
+
+  return {
+    id: transaction._id.toString(),
+    bookingId: transaction.bookingId?.toString() || "",
+    clientId: transaction.clientId?.toString(),
+    clientName: transaction.clientName,
+    lawyerId: transaction.lawyerId?.toString(),
+    lawyerName: transaction.lawyerName,
+    caseTitle: transaction.caseTitle,
+    amount: transaction.amount,
+    commissionAmount: commission,
+    netAmount: net,
+    currency: transaction.currency,
+    status: transaction.status,
+    paidAt: transaction.paidAt,
+    method: transaction.method,
+  };
+};
 
 export const toBookingDto = (b) => ({
   id: b._id.toString(),
@@ -383,6 +396,15 @@ const updateCaseStatus = async (req, res) => {
 
     if (req.user._id.toString() !== caseItem.lawyerId.toString()) {
       return res.status(403).json({ message: "You can only update your assigned cases." });
+    }
+
+    if (status === "active") {
+      const lawyer = await Lawyer.findById(caseItem.lawyerId).select("membershipTier").lean();
+      if (!lawyer || lawyer.membershipTier !== "premium") {
+        return res.status(403).json({ 
+          message: "You must upgrade to the Premium Plan to accept and manage cases. The free Basic Plan only supports exactly 1 consultation." 
+        });
+      }
     }
   }
 
@@ -800,9 +822,20 @@ const getAdminOverview = async (_req, res) => {
     Booking.find({}).sort({ createdAt: -1 }).lean(),
   ]);
 
-  const totalRevenue = transactions
-    .filter((t) => t.status === "completed")
+  const subscriptionRevenue = transactions
+    .filter((t) => t.status === "completed" && String(t.caseTitle).includes("Membership Subscription"))
     .reduce((sum, t) => sum + t.amount, 0);
+
+  const commissionRevenue = transactions
+    .filter((t) => t.status === "completed" && !String(t.caseTitle).includes("Membership Subscription"))
+    .reduce((sum, t) => {
+      const comm = t.commissionAmount !== undefined && t.commissionAmount !== null && t.commissionAmount > 0
+        ? t.commissionAmount
+        : Number((t.amount * 0.02).toFixed(2));
+      return sum + comm;
+    }, 0);
+
+  const totalRevenue = Number((subscriptionRevenue + commissionRevenue).toFixed(2));
 
   return res.status(200).json({
     stats: {
@@ -1003,15 +1036,26 @@ const getLawyerEarnings = async (req, res) => {
   const consultationTransactions = transactions.filter(t => String(t.caseTitle).startsWith("Consultation on "));
   const caseTransactions = transactions.filter(t => !String(t.caseTitle).startsWith("Consultation on "));
 
-  const consultationEarnings = consultationTransactions.reduce((sum, t) => sum + t.amount, 0);
-  const caseEarnings = caseTransactions.reduce((sum, t) => sum + t.amount, 0);
-  const totalEarnings = transactions.reduce((sum, t) => sum + t.amount, 0);
+  // Helper to safely get netAmount (98%) and handle legacy transactions beautifully
+  const getNet = (t) => t.netAmount !== undefined && t.netAmount !== null && t.netAmount > 0
+    ? t.netAmount
+    : Number((t.amount * 0.98).toFixed(2));
+
+  const consultationEarnings = Number(consultationTransactions.reduce((sum, t) => sum + getNet(t), 0).toFixed(2));
+  const caseEarnings = Number(caseTransactions.reduce((sum, t) => sum + getNet(t), 0).toFixed(2));
+  const totalEarnings = Number(transactions.reduce((sum, t) => sum + getNet(t), 0).toFixed(2));
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-  const thisMonthEarnings = transactions
+  const thisMonthEarnings = Number(transactions
     .filter((t) => t.paidAt >= monthStart)
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + getNet(t), 0).toFixed(2));
+
+  // Count bookings directly to ensure free consultations are correctly counted
+  const consultationsCount = await Booking.countDocuments({
+    lawyerId: req.user._id,
+    status: { $in: ["approved", "completed", "paid"] },
+  });
 
   return res.status(200).json({ 
     totalEarnings, 
@@ -1019,7 +1063,7 @@ const getLawyerEarnings = async (req, res) => {
     caseEarnings,
     thisMonthEarnings, 
     transactionsCount: transactions.length,
-    consultationsCount: consultationTransactions.length,
+    consultationsCount,
     casesCount: caseTransactions.length,
     reputationScore: lawyer?.reputationScore || 0,
     rating: lawyer?.rating || 0,

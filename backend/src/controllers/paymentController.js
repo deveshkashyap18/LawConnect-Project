@@ -137,6 +137,10 @@ export const verifyPayment = async (req, res) => {
       const lawyer = await Lawyer.findById(caseItem.lawyerId).lean();
       const client = await User.findById(caseItem.clientId).lean();
 
+      const caseAmount = Number(caseItem.finalFee);
+      const caseCommission = Number((caseAmount * 0.02).toFixed(2)); // 2% Commission
+      const caseNet = Number((caseAmount - caseCommission).toFixed(2)); // 98% Net
+
       await Transaction.create({
         bookingId: new mongoose.Types.ObjectId(),
         clientId: caseItem.clientId,
@@ -144,7 +148,9 @@ export const verifyPayment = async (req, res) => {
         lawyerId: caseItem.lawyerId,
         lawyerName: lawyer?.name || "Lawyer",
         caseTitle: caseItem.title,
-        amount: caseItem.finalFee,
+        amount: caseAmount,
+        commissionAmount: caseCommission,
+        netAmount: caseNet,
         status: "completed",
         paidAt: new Date().toISOString().split("T")[0],
         method: "RAZORPAY",
@@ -176,6 +182,10 @@ export const verifyPayment = async (req, res) => {
     booking.paymentStatus = "paid";
     await booking.save();
 
+    const bookingAmount = Number(booking.amount);
+    const bookingCommission = Number((bookingAmount * 0.02).toFixed(2)); // 2% Commission
+    const bookingNet = Number((bookingAmount - bookingCommission).toFixed(2)); // 98% Net
+
     await Transaction.findOneAndUpdate(
       { bookingId: booking._id },
       {
@@ -185,7 +195,9 @@ export const verifyPayment = async (req, res) => {
         lawyerId: booking.lawyerId,
         lawyerName: booking.lawyerName,
         caseTitle: `Consultation on ${booking.date}`,
-        amount: booking.amount,
+        amount: bookingAmount,
+        commissionAmount: bookingCommission,
+        netAmount: bookingNet,
         currency: "INR",
         status: "completed",
         paidAt: new Date().toISOString().split("T")[0],

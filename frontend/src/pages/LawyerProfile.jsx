@@ -175,6 +175,17 @@ const LawyerProfile = () => {
       return;
     }
 
+    if (currentUser.membershipTier === "basic") {
+      const activeBookingsCount = bookings.filter(b => b.status !== "cancelled").length;
+      if (activeBookingsCount >= 1) {
+        toast.error("Under the free Basic Plan, you can only book exactly 1 consultation. Please upgrade to Client Plus for unlimited bookings.");
+        setTimeout(() => {
+          window.location.href = "/pricing";
+        }, 1500);
+        return;
+      }
+    }
+
     try {
       setIsSubmitting(true);
       
@@ -214,6 +225,17 @@ const LawyerProfile = () => {
         window.location.href = "/pricing";
       }, 1500);
       return;
+    }
+
+    if (currentUser.membershipTier === "basic") {
+      const activeBookingsCount = bookings.filter(b => b.status !== "cancelled").length;
+      if (activeBookingsCount >= 1) {
+        toast.error("Under the free Basic Plan, you can only book exactly 1 consultation. Please upgrade to Client Plus for unlimited bookings.");
+        setTimeout(() => {
+          window.location.href = "/pricing";
+        }, 1500);
+        return;
+      }
     }
 
     setIsDialogOpen(true);

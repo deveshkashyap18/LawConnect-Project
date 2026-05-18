@@ -85,10 +85,27 @@ const AdminDashboard = () => {
     [transactions]
   );
 
-  const caseTransactions = useMemo(
-    () => transactions.filter(t => !String(t.caseTitle).startsWith("Consultation on ")),
+  const subscriptionTransactions = useMemo(
+    () => transactions.filter(t => String(t.caseTitle).includes("Membership Subscription")),
     [transactions]
   );
+
+  const caseTransactions = useMemo(
+    () => transactions.filter(t => !String(t.caseTitle).startsWith("Consultation on ") && !String(t.caseTitle).includes("Membership Subscription")),
+    [transactions]
+  );
+
+  const subscriptionRevenue = useMemo(() => {
+    return subscriptionTransactions
+      .filter((t) => t.status === "completed")
+      .reduce((sum, t) => sum + t.amount, 0);
+  }, [subscriptionTransactions]);
+
+  const commissionRevenue = useMemo(() => {
+    return transactions
+      .filter((t) => t.status === "completed" && !String(t.caseTitle).includes("Membership Subscription"))
+      .reduce((sum, t) => sum + (t.commissionAmount || t.amount * 0.02), 0);
+  }, [transactions]);
 
   const pendingLawyers = useMemo(
     () => lawyers.filter((lawyer) => !lawyer.verified),
@@ -279,8 +296,18 @@ const AdminDashboard = () => {
                   <div>
                     <p className="text-sm text-muted-foreground">Total Revenue</p>
                     <p className="text-3xl font-bold">{formatCurrency(stats.totalRevenue)}</p>
+                    <div className="text-[10px] text-muted-foreground mt-2 space-y-0.5 border-t pt-1 border-border/40">
+                      <div className="flex justify-between gap-4">
+                        <span>Subscriptions:</span>
+                        <span className="font-semibold text-foreground">{formatCurrency(subscriptionRevenue)}</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span>Commissions (2%):</span>
+                        <span className="font-semibold text-foreground">{formatCurrency(commissionRevenue)}</span>
+                      </div>
+                    </div>
                   </div>
-                  <IndianRupee className="h-8 w-8 text-success" />
+                  <IndianRupee className="h-8 w-8 text-success self-start" />
                 </div>
               </CardContent>
             </Card>
@@ -290,7 +317,15 @@ const AdminDashboard = () => {
             <TabsList>
               <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="bookings">Bookings</TabsTrigger>
-              <TabsTrigger value="verification">Lawyer Verification</TabsTrigger>
+              <TabsTrigger value="verification" className="relative flex items-center gap-2">
+                Lawyer Verification
+                {pendingLawyers.length > 0 && (
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-destructive"></span>
+                  </span>
+                )}
+              </TabsTrigger>
               <TabsTrigger value="disputes">Disputes</TabsTrigger>
               <TabsTrigger value="transactions">Transactions</TabsTrigger>
               <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -614,6 +649,42 @@ const AdminDashboard = () => {
             <TabsContent value="transactions" className="mt-6 space-y-6">
               <Card>
                 <CardHeader>
+                  <CardTitle>Subscription Purchases (Platform Revenue)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {subscriptionTransactions.length === 0 ? (
+                      <p className="text-muted-foreground">No subscription transactions yet.</p>
+                    ) : (
+                      subscriptionTransactions.map((transaction) => (
+                        <div
+                          key={transaction.id}
+                          className="flex items-center justify-between gap-4 p-3 border rounded-lg bg-yellow-500/5 border-yellow-500/20"
+                        >
+                          <div>
+                            <p className="font-semibold text-yellow-600 dark:text-yellow-400">{transaction.caseTitle}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Purchased by: {transaction.clientName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Method: {transaction.method} | Date: {transaction.paidAt}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-bold text-success">{formatCurrency(transaction.amount)}</p>
+                            <Badge className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 border-none mt-1 capitalize font-bold">
+                              {transaction.status}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
                   <CardTitle>Consultation Transactions</CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -722,8 +793,16 @@ const AdminDashboard = () => {
                   <CardContent>
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Completed Revenue</span>
-                        <span className="font-semibold">{formatCurrency(stats.totalRevenue)}</span>
+                        <span className="text-muted-foreground">Total Revenue</span>
+                        <span className="font-semibold text-lg">{formatCurrency(stats.totalRevenue)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm pl-4 border-l-2 border-primary/20">
+                        <span className="text-muted-foreground">Subscription Purchases</span>
+                        <span className="font-medium text-success">{formatCurrency(subscriptionRevenue)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm pl-4 border-l-2 border-primary/20">
+                        <span className="text-muted-foreground">Platform Commissions (2%)</span>
+                        <span className="font-medium text-success">{formatCurrency(commissionRevenue)}</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-muted-foreground">Pending Lawyer Reviews</span>

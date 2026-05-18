@@ -5,6 +5,7 @@ import { Lawyer } from "../models/Lawyer.js";
 import { User } from "../models/User.js";
 
 import { getAvatar } from "../lib/avatarUtils.js";
+import { sendOtpEmail } from "../lib/emailService.js";
 
 const sanitizeUser = (user) => {
   const nextUser = { ...user };
@@ -41,10 +42,75 @@ const hydrateUser = async (userDocument) => {
   return baseUser;
 };
 
+const otpStorage = new Map();
+
+const sendOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: "Email is required." });
+    }
+
+    // Check if user exists in either collection
+    const [userExists, lawyerExists] = await Promise.all([
+      User.findOne({ email: normalizedEmail }).lean(),
+      Lawyer.findOne({ email: normalizedEmail }).lean(),
+    ]);
+
+    if (userExists || lawyerExists) {
+      return res.status(400).json({ message: "A user with this email already exists." });
+    }
+
+    // Generate secure 6-digit OTP
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    
+    // Store OTP in-memory with 5 minutes expiry
+    otpStorage.set(normalizedEmail, {
+      otp,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+
+    console.log("\n========================================");
+    console.log(`📨 VERIFICATION OTP FOR ${normalizedEmail} IS: ${otp}`);
+    console.log("========================================\n");
+
+    // Send email via Gmail transporter
+    sendOtpEmail(normalizedEmail, otp).catch((err) => {
+      console.error("Failed to send OTP email asynchronously:", err);
+    });
+
+    return res.status(200).json({ 
+      message: "Verification OTP has been sent to your email."
+    });
+  } catch (error) {
+    console.error("Error in sendOtp:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
+};
+
 const signup = async (req, res) => {
-  const { name, email, password, role, ...rest } = req.body;
+  const { name, email, password, role, otp, ...rest } = req.body;
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const nextRole = role || "client";
+
+  // Validate OTP
+  const otpRecord = otpStorage.get(normalizedEmail);
+  if (!otpRecord) {
+    return res.status(400).json({ message: "OTP not found. Please request a new OTP." });
+  }
+
+  if (Date.now() > otpRecord.expiresAt) {
+    otpStorage.delete(normalizedEmail);
+    return res.status(400).json({ message: "OTP has expired. Please request a new one." });
+  }
+
+  if (String(otpRecord.otp) !== String(otp || "").trim()) {
+    return res.status(400).json({ message: "Incorrect OTP. Please enter the correct verification code." });
+  }
+
+  // Clear OTP upon success
+  otpStorage.delete(normalizedEmail);
 
   // Check if user exists in either collection
   const [userExists, lawyerExists] = await Promise.all([
@@ -119,7 +185,7 @@ const me = async (req, res) => res.status(200).json({ user: await hydrateUser(re
 const logout = async (_req, res) => res.status(204).send();
 
 const updateMe = async (req, res) => {
-  const { name, phone, location, avatar, email, currentPassword, newPassword } = req.body;
+  const { name, phone, location, bio, avatar, email, currentPassword, newPassword } = req.body;
   const role = req.user.role;
   const Model = role === "lawyer" ? Lawyer : User;
 
@@ -145,6 +211,7 @@ const updateMe = async (req, res) => {
   if (name !== undefined) user.name = name;
   if (phone !== undefined) user.phone = phone;
   if (location !== undefined) user.location = location;
+  if (bio !== undefined) user.bio = bio;
   if (avatar !== undefined) user.avatar = avatar;
 
   if (newPassword) {
@@ -164,4 +231,4 @@ const updateMe = async (req, res) => {
   return res.status(200).json({ user: await hydrateUser(user) });
 };
 
-export { login, logout, me, signup, updateMe };
+export { login, logout, me, signup, updateMe, sendOtp };

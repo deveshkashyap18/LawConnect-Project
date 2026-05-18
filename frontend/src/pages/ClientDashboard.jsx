@@ -398,13 +398,15 @@ const ClientDashboard = () => {
                   Manage your cases, documents, hearings, and conversations in one place.
                 </p>
               </div>
-              <Badge className={
-                currentUser?.membershipTier === "plus"
-                  ? "bg-yellow-500 text-slate-900 hover:bg-yellow-500 font-extrabold text-lg px-5 py-2.5 rounded-full border-none shadow-lg shadow-yellow-500/20"
-                  : "bg-slate-700 text-slate-200 hover:bg-slate-700 font-semibold text-lg px-5 py-2.5 rounded-full border-none shadow-md"
-              }>
-                {currentUser?.membershipTier === "plus" ? "Client Plus" : "Free Membership"}
-              </Badge>
+              {currentUser?.membershipTier && currentUser.membershipTier !== "" && (
+                <Badge className={
+                  currentUser.membershipTier === "plus"
+                    ? "bg-yellow-500 text-slate-900 hover:bg-yellow-500 font-extrabold text-lg px-5 py-2.5 rounded-full border-none shadow-lg shadow-yellow-500/20"
+                    : "bg-slate-700 text-slate-200 hover:bg-slate-700 font-semibold text-lg px-5 py-2.5 rounded-full border-none shadow-md"
+                }>
+                  {currentUser.membershipTier === "plus" ? "Client Plus" : "Free Membership"}
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -488,7 +490,7 @@ const ClientDashboard = () => {
               <TabsTrigger value="cases">My Cases</TabsTrigger>
               <TabsTrigger value="documents">Documents</TabsTrigger>
               <TabsTrigger value="messages">Messages</TabsTrigger>
-              <TabsTrigger value="calendar">Calendar</TabsTrigger>
+              <TabsTrigger value="calendar">Hearing History</TabsTrigger>
               <TabsTrigger value="bookings">Bookings</TabsTrigger>
             </TabsList>
 
@@ -708,7 +710,7 @@ const ClientDashboard = () => {
                               onClick={() => handleCompleteCase(caseItem.id)}
                             >
                               <CheckCircle className="h-4 w-4 mr-2" />
-                              Complete Case
+                              Close Case
                             </Button>
                           )}
                         </div>
@@ -885,38 +887,24 @@ const ClientDashboard = () => {
               </Card>
             </TabsContent>
 
-            {/* ── Calendar Tab ──────────────────────────────────────────── */}
+            {/* ── Hearing History Tab ──────────────────────────────────────────── */}
             <TabsContent value="calendar" className="space-y-4 mt-6">
-              <div className="grid md:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Calendar</CardTitle>
-                  </CardHeader>
-                  <CardContent className="flex justify-center">
-                    <Calendar
-                      mode="single"
-                      selected={date}
-                      onSelect={setDate}
-                      className="rounded-md border"
-                    />
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Upcoming Hearings</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {cases.flatMap((c) => c.hearingDates || []).length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No upcoming hearings scheduled.</p>
-                    ) : (
-                      <div className="space-y-4">
-                        {cases.flatMap((caseItem) =>
-                          (caseItem.hearingDates || []).map((hearing, idx) => (
-                            <div
-                              key={hearing.id || `${caseItem.id}-${idx}`}
-                              className="flex items-start gap-4 p-4 border rounded-lg"
-                            >
+              <Card>
+                <CardHeader>
+                  <CardTitle>Hearing History</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {cases.flatMap((c) => c.hearingDates || []).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No hearings in history.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {cases.flatMap((caseItem) =>
+                        (caseItem.hearingDates || []).map((hearing, idx) => (
+                          <div
+                            key={hearing.id || `${caseItem.id}-${idx}`}
+                            className="flex items-start justify-between gap-4 p-4 border rounded-lg hover:bg-muted/10 transition-colors"
+                          >
+                            <div className="flex items-start gap-4">
                               <CalendarIcon className="h-5 w-5 text-primary mt-1" />
                               <div className="flex-1">
                                 <h4 className="font-semibold">{caseItem.title}</h4>
@@ -926,13 +914,20 @@ const ClientDashboard = () => {
                                 <p className="text-sm text-muted-foreground">{hearing.location}</p>
                               </div>
                             </div>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
+                            <Badge className={
+                              hearing.status === "completed"
+                                ? "bg-green-500/10 text-green-500 hover:bg-green-500/20 border-green-500/20 shrink-0"
+                                : "bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 border-blue-500/20 shrink-0"
+                            } variant="outline">
+                              {hearing.status === "completed" ? "Completed" : "Scheduled"}
+                            </Badge>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {/* ── Bookings Tab — real data ───────────────────────────────── */}

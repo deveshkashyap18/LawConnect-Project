@@ -568,6 +568,11 @@ const LawyerDashboard = () => {
   };
 
   const handleCaseStatusUpdate = async (caseId, status) => {
+    if (status === "active" && (!currentUser?.membershipTier || currentUser.membershipTier !== "premium")) {
+      toast.error("You must upgrade to the Premium Plan to accept and manage cases. The free Basic Plan only supports exactly 1 consultation.");
+      return;
+    }
+
     try {
       const updatedCase = await updateCaseStatus(caseId, status);
       setLawyerCases((prev) =>
@@ -619,7 +624,15 @@ const LawyerDashboard = () => {
                 </h1>
                 <p className="text-white/80">Manage your practice, clients, and case activity.</p>
               </div>
-              <Badge className="gradient-premium text-lg px-4 py-2">{membershipLabel} Member</Badge>
+              {currentUser?.membershipTier && currentUser.membershipTier !== "" && (
+                <Badge className={
+                  currentUser.membershipTier === "premium"
+                    ? "gradient-premium text-lg px-4 py-2"
+                    : "bg-slate-700 text-slate-200 hover:bg-slate-700 font-semibold text-lg px-4 py-2 rounded-full border-none shadow-md"
+                }>
+                  {currentUser.membershipTier === "premium" ? "Premium Member" : "Basic Member"}
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -729,6 +742,7 @@ const LawyerDashboard = () => {
               <TabsTrigger value="fees" className="bg-primary/5 text-primary data-[state=active]:bg-primary data-[state=active]:text-white transition-all">
                 Fees & Pricing
               </TabsTrigger>
+              <TabsTrigger value="hearings">Hearing History</TabsTrigger>
               <TabsTrigger value="profile">Profile</TabsTrigger>
             </TabsList>
 
@@ -1429,6 +1443,61 @@ const LawyerDashboard = () => {
               </div>
             </TabsContent>
 
+            {/* Hearing History Tab */}
+            <TabsContent value="hearings" className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Hearing History</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {lawyerCases.flatMap((c) => c.hearingDates || []).length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No hearings in history.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {lawyerCases.flatMap((caseItem) =>
+                        (caseItem.hearingDates || []).map((hearing, idx) => (
+                          <div
+                            key={hearing.id || `${caseItem.id}-${idx}`}
+                            className="flex items-start justify-between gap-4 p-4 border rounded-lg hover:bg-muted/10 transition-colors"
+                          >
+                            <div className="flex items-start gap-4">
+                              <CalendarIcon className="h-5 w-5 text-primary mt-1" />
+                              <div className="flex-1">
+                                <h4 className="font-semibold">{caseItem.title}</h4>
+                                <p className="text-sm text-muted-foreground">
+                                  {hearing.date} | {hearing.title}
+                                </p>
+                                <p className="text-sm text-muted-foreground">{hearing.location}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {hearing.status !== "completed" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-xs bg-primary/10 hover:bg-primary/20 text-primary border-none shadow-sm"
+                                  onClick={() => handleUpdateHearingStatus(caseItem.id, hearing.id, "completed")}
+                                >
+                                  Mark Completed
+                                </Button>
+                              )}
+                              <Badge className={
+                                hearing.status === "completed"
+                                  ? "bg-green-500/10 text-green-500 hover:bg-green-500/20 border-green-500/20 shrink-0"
+                                  : "bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 border-blue-500/20 shrink-0"
+                              } variant="outline">
+                                {hearing.status === "completed" ? "Completed" : "Scheduled"}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             {/* Profile Tab — real data from currentUser (synced via hydrateUser) */}
             <TabsContent value="profile" className="mt-6">
               <div className="grid md:grid-cols-2 gap-6">
@@ -1442,8 +1511,16 @@ const LawyerDashboard = () => {
                       <span className="font-bold text-lg text-primary">INR {currentUser?.hourlyRate || 0}</span>
                     </div>
                     <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">General Case Fee</span>
+                      <span className="font-bold text-lg text-primary">INR {currentUser?.baseCaseFee || 5000}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Name</span>
                       <span className="font-medium">{currentUser?.name || "—"}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Mobile No</span>
+                      <span className="font-medium">{currentUser?.phone || "—"}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Email</span>

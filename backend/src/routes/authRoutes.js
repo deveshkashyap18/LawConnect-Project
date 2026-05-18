@@ -6,6 +6,7 @@ import {
   me,
   signup,
   updateMe,
+  sendOtp,
 } from "../controllers/authController.js";
 import { authRequired } from "../middleware/auth.js";
 
@@ -21,6 +22,7 @@ authRoutes.get("/demo-credentials", (_req, res) => {
   });
 });
 
+authRoutes.post("/send-otp", sendOtp);
 authRoutes.post("/signup", signup);
 authRoutes.post("/login", login);
 authRoutes.post("/logout", authRequired, logout);

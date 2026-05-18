@@ -9,6 +9,8 @@ const transactionSchema = new mongoose.Schema(
     lawyerName: { type: String, required: true },
     caseTitle: { type: String, required: true },
     amount: { type: Number, required: true },
+    commissionAmount: { type: Number, default: 0 },
+    netAmount: { type: Number, default: 0 },
     currency: { type: String, default: "INR" },
     status: {
       type: String,
