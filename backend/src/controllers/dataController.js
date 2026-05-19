@@ -3,6 +3,7 @@ import { Booking } from "../models/Booking.js";
 import { Case } from "../models/Case.js";
 import { Lawyer } from "../models/Lawyer.js";
 import { Message } from "../models/Message.js";
+import { Notification } from "../models/Notification.js";
 import { Review } from "../models/Review.js";
 import { Transaction } from "../models/Transaction.js";
 import { User } from "../models/User.js";
@@ -705,6 +706,34 @@ const createMessage = async (req, res) => {
   });
 
   const dto = toMessageDto(message.toObject());
+
+  // Create a database notification for the receiver
+  try {
+    const notification = await Notification.create({
+      userId: receiverId.toString(),
+      type: "new_message",
+      title: `New message from ${sender.name}`,
+      body: content ? (String(content).length > 60 ? `${String(content).substring(0, 60)}...` : String(content)) : "Attachment shared",
+      link: "/messages",
+    });
+
+    const io = getIo();
+    if (io) {
+      const notifPayload = {
+        id: notification._id.toString(),
+        type: "new_message",
+        title: notification.title,
+        body: notification.body,
+        link: notification.link,
+        read: false,
+        createdAt: notification.createdAt,
+      };
+      io.to(receiverId.toString()).emit("new_notification", notifPayload);
+    }
+  } catch (err) {
+    console.error("Failed to create message notification in API createMessage:", err);
+  }
+
   return res.status(201).json({ message: dto });
 };
 
@@ -1223,7 +1252,7 @@ const updateMembershipTier = async (req, res) => {
 
 const updateLawyerProfile = async (req, res) => {
   try {
-    const { hourlyRate, baseCaseFee, bio, location, specialization, services } = req.body;
+    const { hourlyRate, baseCaseFee, bio, location, specialization, services, experience } = req.body;
     const lawyer = await Lawyer.findById(req.user._id);
     if (!lawyer) {
       return res.status(404).json({ message: "Lawyer not found." });
@@ -1231,6 +1260,7 @@ const updateLawyerProfile = async (req, res) => {
 
     if (hourlyRate !== undefined) lawyer.hourlyRate = Number(hourlyRate);
     if (baseCaseFee !== undefined) lawyer.baseCaseFee = Number(baseCaseFee);
+    if (experience !== undefined) lawyer.experience = Number(experience);
     if (bio !== undefined) lawyer.bio = bio;
     if (location !== undefined) lawyer.location = location;
     if (specialization !== undefined) lawyer.specialization = specialization;

@@ -542,7 +542,7 @@ const LawyerDashboard = () => {
   };
 
   const handleBookingStatusChange = async (bookingId, status) => {
-    if (status === "approved" && currentUser?.membershipTier === "basic") {
+    if (status === "approved" && (currentUser?.membershipTier === "basic" || !currentUser?.membershipTier)) {
       const activeOrApprovedCount = bookings.filter(
         (b) => b.status === "approved" || b.status === "completed" || b.status === "paid"
       ).length;

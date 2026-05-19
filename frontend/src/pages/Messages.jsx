@@ -170,33 +170,68 @@ const Messages = () => {
     return bookings.find(b => (String(b.clientId) === profId || String(b.lawyerId) === profId) && b.status !== "cancelled");
   }, [activePartner, bookings]);
 
+  // 1. Core messaging socket connection and receive_message hook
   useEffect(() => {
-    if (!currentUserId || !activePartner) return;
-    socket.connect();
+    if (!currentUserId) return;
+    if (!socket.connected) {
+      socket.connect();
+    }
     socket.emit("join", currentUserId);
-    socket.emit("check_status", activePartner.id, (res) => setIsOnline(res.status === "online"));
 
-    const onMessage = (m) => setMessages(prev => {
-      const isDup = prev.some(x => 
-        (x._id && String(x._id) === String(m._id)) || 
-        (m.tempId && String(x._id) === String(m.tempId))
-      );
-      if (isDup) {
-        return prev.map(x => (String(x._id) === String(m._id) || (m.tempId && String(x._id) === String(m.tempId))) ? m : x);
-      }
-      return [...prev, m];
-    });
-    
+    const onMessage = (m) => {
+      console.log("[SOCKET] Received message:", m);
+      setMessages(prev => {
+        const isDup = prev.some(x => 
+          (x._id && String(x._id) === String(m._id)) || 
+          (m.tempId && String(x._id) === String(m.tempId))
+        );
+        if (isDup) {
+          return prev.map(x => (String(x._id) === String(m._id) || (m.tempId && String(x._id) === String(m.tempId))) ? m : x);
+        }
+        return [...prev, m];
+      });
+    };
+
     socket.on("receive_message", onMessage);
-    socket.on("user_status", ({ userId, status }) => String(userId) === String(activePartner.id) && setIsOnline(status === "online"));
-    socket.on("user_typing", ({ userId }) => String(userId) === String(activePartner.id) && setIsTyping(true));
-    socket.on("user_stopped_typing", ({ userId }) => String(userId) === String(activePartner.id) && setIsTyping(false));
-
     return () => {
       socket.off("receive_message", onMessage);
-      socket.off("user_status");
-      socket.off("user_typing");
-      socket.off("user_stopped_typing");
+    };
+  }, [currentUserId]);
+
+  // 2. Active partner status and typing events hook
+  useEffect(() => {
+    if (!currentUserId || !activePartner) {
+      setIsOnline(false);
+      setIsTyping(false);
+      return;
+    }
+
+    socket.emit("check_status", activePartner.id, (res) => setIsOnline(res.status === "online"));
+
+    const handleUserStatus = ({ userId, status }) => {
+      if (String(userId) === String(activePartner.id)) {
+        setIsOnline(status === "online");
+      }
+    };
+    const handleUserTyping = ({ userId }) => {
+      if (String(userId) === String(activePartner.id)) {
+        setIsTyping(true);
+      }
+    };
+    const handleUserStoppedTyping = ({ userId }) => {
+      if (String(userId) === String(activePartner.id)) {
+        setIsTyping(false);
+      }
+    };
+
+    socket.on("user_status", handleUserStatus);
+    socket.on("user_typing", handleUserTyping);
+    socket.on("user_stopped_typing", handleUserStoppedTyping);
+
+    return () => {
+      socket.off("user_status", handleUserStatus);
+      socket.off("user_typing", handleUserTyping);
+      socket.off("user_stopped_typing", handleUserStoppedTyping);
     };
   }, [currentUserId, activePartner]);
 

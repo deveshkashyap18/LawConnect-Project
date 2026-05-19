@@ -1,6 +1,7 @@
 import { Server } from "socket.io";
 import { Lawyer } from "./models/Lawyer.js";
 import { Message } from "./models/Message.js";
+import { Notification } from "./models/Notification.js";
 
 let io;
 const onlineUsers = new Map(); // roomId -> Set<socketId>
@@ -147,6 +148,30 @@ export const initializeSocket = (httpServer) => {
         await emitToResolvedRooms(receiverId, "receive_message", payload);
         // Emit back to sender so they see their own message in real-time (frontend deduplicates by ID)
         await emitToResolvedRooms(socket.userId, "receive_message", payload);
+
+        // Create a database notification for the receiver
+        try {
+          const notification = await Notification.create({
+            userId: receiverId.toString(),
+            type: "new_message",
+            title: `New message from ${senderName}`,
+            body: trimmedContent.length > 60 ? `${trimmedContent.substring(0, 60)}...` : trimmedContent || "Attachment shared",
+            link: "/messages",
+          });
+
+          const notifPayload = {
+            id: notification._id.toString(),
+            type: "new_message",
+            title: notification.title,
+            body: notification.body,
+            link: notification.link,
+            read: false,
+            createdAt: notification.createdAt,
+          };
+          await emitToResolvedRooms(receiverId, "new_notification", notifPayload);
+        } catch (err) {
+          console.error("Failed to create message notification in socket:", err);
+        }
 
         callback?.({ success: true, messageId: message._id.toString(), message: payload });
       } catch (error) {

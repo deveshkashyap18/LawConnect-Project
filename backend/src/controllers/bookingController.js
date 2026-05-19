@@ -386,7 +386,7 @@ const updateBookingStatus = async (req, res) => {
       }
 
       if (status === "approved" && booking.status !== "approved") {
-        if (req.user.membershipTier === "basic") {
+        if (req.user.membershipTier === "basic" || !req.user.membershipTier) {
           const approvedCount = await Booking.countDocuments({
             lawyerId: req.user._id,
             status: { $in: ["approved", "completed", "paid"] },

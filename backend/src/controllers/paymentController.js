@@ -7,6 +7,7 @@ import { Case } from "../models/Case.js";
 import { Lawyer } from "../models/Lawyer.js";
 import { Transaction } from "../models/Transaction.js";
 import { User } from "../models/User.js";
+import { Notification } from "../models/Notification.js";
 import mongoose from "mongoose";
 import { getIo } from "../socket.js";
 import { toCaseDto, toBookingDto } from "./dataController.js";
@@ -162,8 +163,50 @@ export const verifyPayment = async (req, res) => {
         const caseDto = toCaseDto(caseItem.toObject());
         io.to(caseItem.clientId.toString()).emit("case_update", caseDto);
         io.to(caseItem.lawyerId.toString()).emit("case_update", caseDto);
+
+        // 1. Client Notification
+        const clientNotif = await Notification.create({
+          userId: caseItem.clientId.toString(),
+          type: "case_update",
+          title: "Payment Successful",
+          body: `Payment of INR ${caseItem.finalFee} for case "${caseItem.title}" was verified successfully.`,
+          link: "/dashboard",
+        });
+
+        if (io) {
+          io.to(caseItem.clientId.toString()).emit("new_notification", {
+            id: clientNotif._id.toString(),
+            type: "case_update",
+            title: clientNotif.title,
+            body: clientNotif.body,
+            link: clientNotif.link,
+            read: false,
+            createdAt: clientNotif.createdAt,
+          });
+        }
+
+        // 2. Lawyer Notification
+        const lawyerNotif = await Notification.create({
+          userId: caseItem.lawyerId.toString(),
+          type: "case_update",
+          title: "Payment Received",
+          body: `Payment of INR ${caseItem.finalFee} received for case "${caseItem.title}".`,
+          link: "/dashboard",
+        });
+
+        if (io) {
+          io.to(caseItem.lawyerId.toString()).emit("new_notification", {
+            id: lawyerNotif._id.toString(),
+            type: "case_update",
+            title: lawyerNotif.title,
+            body: lawyerNotif.body,
+            link: lawyerNotif.link,
+            read: false,
+            createdAt: lawyerNotif.createdAt,
+          });
+        }
       } catch (e) {
-        console.error("Socket emit error:", e);
+        console.error("Socket emit error / notification error:", e);
       }
 
       return res.status(200).json({ 
@@ -212,8 +255,50 @@ export const verifyPayment = async (req, res) => {
       const bookingDto = toBookingDto(booking.toObject());
       io.to(booking.clientId.toString()).emit("booking_updated", bookingDto);
       io.to(booking.lawyerId.toString()).emit("booking_updated", bookingDto);
+
+      // 1. Client Notification
+      const clientNotif = await Notification.create({
+        userId: booking.clientId.toString(),
+        type: "booking_completed",
+        title: "Payment Successful",
+        body: `Payment of INR ${booking.amount} for consultation with ${booking.lawyerName} was successful.`,
+        link: "/dashboard",
+      });
+
+      if (io) {
+        io.to(booking.clientId.toString()).emit("new_notification", {
+          id: clientNotif._id.toString(),
+          type: "booking_completed",
+          title: clientNotif.title,
+          body: clientNotif.body,
+          link: clientNotif.link,
+          read: false,
+          createdAt: clientNotif.createdAt,
+        });
+      }
+
+      // 2. Lawyer Notification
+      const lawyerNotif = await Notification.create({
+        userId: booking.lawyerId.toString(),
+        type: "booking_completed",
+        title: "Consultation Paid",
+        body: `Consultation fee of INR ${booking.amount} paid by ${booking.clientName}.`,
+        link: "/dashboard",
+      });
+
+      if (io) {
+        io.to(booking.lawyerId.toString()).emit("new_notification", {
+          id: lawyerNotif._id.toString(),
+          type: "booking_completed",
+          title: lawyerNotif.title,
+          body: lawyerNotif.body,
+          link: lawyerNotif.link,
+          read: false,
+          createdAt: lawyerNotif.createdAt,
+        });
+      }
     } catch (e) {
-      console.error("Socket emit error:", e);
+      console.error("Socket emit error / notification error:", e);
     }
 
     return res.status(200).json({ 
@@ -322,6 +407,32 @@ export const verifySubscriptionPayment = async (req, res) => {
       paidAt: new Date().toISOString().split("T")[0],
       method: "RAZORPAY",
     });
+
+    // Create and emit notification for membership upgrade
+    try {
+      const io = getIo();
+      const notif = await Notification.create({
+        userId: userId.toString(),
+        type: "general",
+        title: "Subscription Upgraded",
+        body: `Your membership has been successfully upgraded to ${plan === "premium" ? "Premium" : "Client Plus"}!`,
+        link: "/dashboard",
+      });
+
+      if (io) {
+        io.to(userId.toString()).emit("new_notification", {
+          id: notif._id.toString(),
+          type: "general",
+          title: notif.title,
+          body: notif.body,
+          link: notif.link,
+          read: false,
+          createdAt: notif.createdAt,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to create subscription notification:", err);
+    }
 
     return res.status(200).json({ 
       message: `Subscription successfully verified and upgraded to ${plan === "premium" ? "Premium" : "Client Plus"}!`, 

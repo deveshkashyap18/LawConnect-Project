@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Bell, LogOut, Menu, Moon, Scale, Settings, Sun, User, ArrowLeft } from "lucide-react";
 
@@ -38,48 +38,79 @@ const NotificationBell = ({
   handleMarkAllRead,
   handleNotifClick,
 }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const bellRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleClickOutside = (event) => {
+      if (bellRef.current && !bellRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, [isOpen]);
+
   if (!currentUser) return null;
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative rounded-full">
-          <Bell className="h-5 w-5" />
-          {unreadCount > 0 ? (
-            <span className="absolute right-2 top-2 flex h-2.5 w-2.5 rounded-full bg-red-600" />
-          ) : null}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <span className="font-semibold text-sm">Notifications</span>
-          {unreadCount > 0 ? (
-            <Button variant="ghost" size="sm" onClick={handleMarkAllRead} className="h-auto p-0 text-xs text-primary">
-              Mark all read
-            </Button>
-          ) : null}
-        </div>
-        <div className="max-h-80 overflow-y-auto">
-          {notifications.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">No notifications yet.</div>
-          ) : (
-            notifications.map((notification) => (
+    <div className="relative inline-block" ref={bellRef}>
+      <button
+        type="button"
+        className="relative p-2 rounded-full text-slate-300 hover:text-white hover:bg-white/10 transition-colors focus:outline-none"
+        onClick={() => setIsOpen((prev) => !prev)}
+      >
+        <Bell className="h-5 w-5" />
+        {unreadCount > 0 ? (
+          <span className="absolute right-2 top-2 flex h-2.5 w-2.5 rounded-full bg-red-600 animate-pulse" />
+        ) : null}
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 mt-2 w-80 rounded-xl border border-white/10 bg-[#1e293b] shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in duration-100 text-white">
+          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3 bg-[#0f172a]/40">
+            <span className="font-semibold text-sm">Notifications</span>
+            {unreadCount > 0 ? (
               <button
-                key={notification.id}
                 type="button"
-                onClick={() => handleNotifClick(notification)}
-                className={`block w-full border-b px-4 py-3 text-left hover:bg-muted/50 ${
-                  !notification.read ? "bg-muted/20" : ""
-                }`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMarkAllRead();
+                }}
+                className="h-auto p-0 text-xs text-blue-400 hover:text-blue-300 hover:underline bg-transparent border-0 cursor-pointer"
               >
-                <div className="text-sm font-medium">{notification.title}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{notification.body}</div>
+                Mark all read
               </button>
-            ))
-          )}
+            ) : null}
+          </div>
+          <div className="max-h-80 overflow-y-auto">
+            {notifications.length === 0 ? (
+              <div className="p-4 text-center text-sm text-slate-400">No notifications</div>
+            ) : (
+              notifications.map((notification) => (
+                <button
+                  key={notification.id}
+                  type="button"
+                  onClick={() => {
+                    handleNotifClick(notification);
+                    setIsOpen(false);
+                  }}
+                  className={`block w-full border-b border-white/5 px-4 py-3 text-left hover:bg-white/5 transition-colors ${
+                    !notification.read ? "bg-white/5 font-semibold text-blue-100" : "text-slate-300"
+                  }`}
+                >
+                  <div className="text-sm font-medium">{notification.title}</div>
+                  <div className="mt-1 text-xs opacity-80">{notification.body}</div>
+                </button>
+              ))
+            )}
+          </div>
         </div>
-      </PopoverContent>
-    </Popover>
+      )}
+    </div>
   );
 };
 
@@ -99,8 +130,29 @@ const Navbar = () => {
     // Reset unread dot when on messages page
     if (location.pathname === "/messages") {
       setHasUnreadMessages(false);
+
+      const markMessageNotificationsRead = async () => {
+        try {
+          const unreadMsgs = notifications.filter((n) => n.type === "new_message" && !n.read);
+          if (unreadMsgs.length > 0) {
+            for (const notif of unreadMsgs) {
+              await markNotificationRead(notif.id);
+            }
+            setNotifications((prev) =>
+              prev.map((n) => (n.type === "new_message" ? { ...n, read: true } : n)),
+            );
+            setUnreadCount((prev) => Math.max(0, prev - unreadMsgs.length));
+          }
+        } catch (err) {
+          console.error("Failed to mark message notifications read:", err);
+        }
+      };
+
+      if (notifications.length > 0) {
+        markMessageNotificationsRead();
+      }
     }
-  }, [location.pathname]);
+  }, [location.pathname, notifications.length]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -124,6 +176,10 @@ const Navbar = () => {
     socket.emit("join", currentUser.id);
 
     const handleNewNotification = (notification) => {
+      if (notification.type === "new_message" && location.pathname === "/messages") {
+        markNotificationRead(notification.id).catch(() => {});
+        return;
+      }
       setNotifications((prev) => [notification, ...prev]);
       setUnreadCount((prev) => prev + 1);
     };
@@ -143,7 +199,7 @@ const Navbar = () => {
       socket.off("new_notification", handleNewNotification);
       socket.off("receive_message", handleIncomingMessage);
     };
-  }, [currentUser]);
+  }, [currentUser, location.pathname]);
 
   const handleMarkAllRead = async () => {
     try {
