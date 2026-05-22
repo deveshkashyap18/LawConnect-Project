@@ -8,6 +8,7 @@ import { dataRoutes } from "./routes/dataRoutes.js";
 import { notificationRoutes } from "./routes/notificationRoutes.js";
 import { uploadRoutes } from "./routes/uploadRoutes.js";
 import { paymentRoutes } from "./routes/paymentRoutes.js";
+import { aiRoutes } from "./routes/aiRoutes.js";
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api", dataRoutes);
+app.use("/api/ai", aiRoutes);
 
 // Global error handler
 app.use((err, _req, res, _next) => {

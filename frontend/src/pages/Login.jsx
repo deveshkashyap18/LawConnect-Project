@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/AuthContext";
-import { listDemoCredentials } from "@/lib/authService";
 import { getDashboardPath } from "@/lib/auth";
 import { Scale } from "lucide-react";
 import { toast } from "sonner";
@@ -23,33 +22,7 @@ const Login = () => {
   const [activeRole, setActiveRole] = useState("client");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [demoCredentials, setDemoCredentials] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadDemoCredentials = async () => {
-      const credentials = await listDemoCredentials();
-      if (isMounted) {
-        setDemoCredentials(credentials.filter((item) => item.role !== "admin"));
-      }
-    };
-
-    loadDemoCredentials();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const applyDemoCredentials = (role) => {
-    const demo = demoCredentials.find((item) => item.role === role);
-    if (!demo) return;
-    setActiveRole(role);
-    setEmail(demo.email);
-    setPassword(demo.password);
-  };
 
   const handleLogin = async (role) => {
     if (!email || !password) {
@@ -144,14 +117,6 @@ const Login = () => {
                   <Button type="submit" className="w-full" disabled={isSubmitting}>
                     {isSubmitting ? "Signing in..." : "Login as Client"}
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => applyDemoCredentials("client")}
-                  >
-                    Use Demo Client
-                  </Button>
                 </form>
               </TabsContent>
               <TabsContent value="lawyer">
@@ -186,14 +151,6 @@ const Login = () => {
                   <Button type="submit" className="w-full" disabled={isSubmitting}>
                     {isSubmitting ? "Signing in..." : "Login as Lawyer"}
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => applyDemoCredentials("lawyer")}
-                  >
-                    Use Demo Lawyer
-                  </Button>
                 </form>
               </TabsContent>
             </Tabs>
@@ -208,14 +165,6 @@ const Login = () => {
               <Link to="/admin/login" className="text-primary hover:underline">
                 Open Admin Login
               </Link>
-            </div>
-            <div className="mt-4 rounded-md border p-3 text-xs text-muted-foreground">
-              <p className="font-semibold mb-2">Demo Accounts</p>
-              {demoCredentials.map((item) => (
-                <p key={item.role}>
-                  {item.role}: {item.email} / {item.password}
-                </p>
-              ))}
             </div>
           </CardContent>
         </Card>

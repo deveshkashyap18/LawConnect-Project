@@ -25,6 +25,14 @@ const getPrimaryNavLinks = (role) => {
     ];
   }
 
+  if (role === "client") {
+    return [
+      { to: "/lawyers", label: "Find Lawyers" },
+      { to: "/messages", label: "Messages" },
+      { to: "/client/dashboard", label: "Dashboard" },
+    ];
+  }
+
   return [
     { to: "/lawyers", label: "Find Lawyers" },
     { to: "/messages", label: "Messages" },

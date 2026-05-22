@@ -9,6 +9,7 @@ import AppLoader from "@/components/AppLoader";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ProtectedRoute, PublicOnlyRoute } from "@/components/RouteGuards";
 import { AuthProvider } from "@/context/AuthContext";
+import { AIAssistant } from "@/components/AIAssistant";
 
 const Landing = lazy(() => import("./pages/Landing"));
 const Login = lazy(() => import("./pages/Login"));
@@ -35,6 +36,7 @@ const App = () => {
         <ThemeProvider defaultTheme="light" storageKey="lawconnect-theme">
           <TooltipProvider>
             <Sonner position="bottom-right" richColors />
+            <AIAssistant />
 
             <BrowserRouter>
               <Suspense fallback={<AppLoader />}>
