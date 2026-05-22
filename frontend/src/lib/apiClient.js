@@ -57,7 +57,12 @@ const apiRequest = async (path, options = {}) => {
   }
 
   let response;
-  const API_BASE = import.meta.env.VITE_API_URL || "";
+  // Get base URL and remove trailing slash if present
+  let API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+  // If API_BASE already ends with /api, remove it so we don't duplicate it
+  if (API_BASE.endsWith("/api")) {
+    API_BASE = API_BASE.slice(0, -4);
+  }
 
   try {
     response = await fetch(`${API_BASE}/api${path}`, {
