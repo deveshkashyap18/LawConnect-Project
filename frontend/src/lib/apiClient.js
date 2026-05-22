@@ -57,9 +57,10 @@ const apiRequest = async (path, options = {}) => {
   }
 
   let response;
+  const API_BASE = import.meta.env.VITE_API_URL || "";
 
   try {
-    response = await fetch(`/api${path}`, {
+    response = await fetch(`${API_BASE}/api${path}`, {
       ...options,
       headers,
     });
