@@ -1,19 +1,18 @@
 import nodemailer from "nodemailer";
+import dns from "dns";
+
+// Force IPv4 resolution (fixes Render/Node 18+ ENETUNREACH and ETIMEDOUT issues)
+dns.setDefaultResultOrder("ipv4first");
 
 // Create transporter dynamically based on env credentials
 const getTransporter = () => {
   if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
     return nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true, // true for 465, false for other ports
+      service: "gmail",
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS, // Standard Gmail App Password
       },
-      tls: {
-        rejectUnauthorized: false
-      }
     });
   }
   return null;
