@@ -4,11 +4,16 @@ import nodemailer from "nodemailer";
 const getTransporter = () => {
   if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
     return nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true, // true for 465, false for other ports
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS, // Standard Gmail App Password
       },
+      tls: {
+        rejectUnauthorized: false
+      }
     });
   }
   return null;
